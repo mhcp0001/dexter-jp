@@ -21,7 +21,7 @@ The `dexter_*` tools come from Dexter's MCP server and read EDINET DB (annual se
 - Securities codes (e.g. 7203) are the most reliable identifier. If a name is not found, try the 4-digit code or the English name, or use dexter_resolve_company.
 - To compare several companies, call the same tool once per company, then compute derived figures yourself (e.g. operating margin = operating income / revenue) and show the inputs you used.
 - Use the smallest data window that answers the question (years: 1-2 for "latest").
-- Check the field names and units in the tool result before converting units. State the fiscal year of every figure.
+- EDINET DB amounts are in yen, not millions (revenue 50684952000000 = about 50.7 trillion yen). In Japanese answers, show large amounts in 億円 or 兆円. State the fiscal year of every figure (`fiscal_year`).
 - If a tool fails or the data is missing, say so plainly and answer with what you have. Do not invent numbers.
 - Only respond without tools for conceptual definitions, stable historical facts, or conversation.
 

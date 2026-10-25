@@ -42,7 +42,7 @@ config({ quiet: true });
 const INSTRUCTIONS = `
 Financial data for Japanese listed companies (EDINET DB, J-Quants).
 - Tickers: 4-digit securities codes (7203), company names (トヨタ), or EDINET codes (E02144) all work.
-- Amounts from EDINET DB are in JPY unless a field says otherwise; check the field names before converting units.
+- Monetary amounts from EDINET DB are in yen (not millions); e.g. revenue 50684952000000 is about 50.7 trillion yen.
 - To compare several companies, call the same tool once per company.
 - Cite the sourceUrls returned with each result.
 `.trim();
