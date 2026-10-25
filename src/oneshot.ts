@@ -4,11 +4,22 @@ config({ quiet: true });
 
 import { Agent } from "./agent/index.js";
 import { getSetting } from "./utils/config.js";
+import { isOpencodeBackend, OpencodeBackendError, runOpencodeForMessage } from "./gateway/opencode-runner.js";
 
 const query = process.argv.slice(2).join(" ");
 if (!query) {
   console.error("Usage: bun src/oneshot.ts <query>");
   process.exit(1);
+}
+
+if (isOpencodeBackend()) {
+  try {
+    console.log(await runOpencodeForMessage({ sessionKey: "oneshot", query, isolatedSession: true }));
+    process.exit(0);
+  } catch (err) {
+    console.error(err instanceof OpencodeBackendError ? err.userMessage : String(err));
+    process.exit(1);
+  }
 }
 
 const provider = getSetting("provider", "anthropic");

@@ -12,6 +12,7 @@ import { resolveRoute } from './routing/resolve-route.js';
 import { resolveSessionStorePath, upsertSessionMeta } from './sessions/store.js';
 import { loadGatewayConfig, type GatewayConfig } from './config.js';
 import { runAgentForMessage } from './agent-runner.js';
+import { OpencodeBackendError } from './opencode-runner.js';
 import { startCronRunner } from '../cron/runner.js';
 import { ensureHeartbeatCronJob } from '../cron/heartbeat-migration.js';
 import {
@@ -216,6 +217,16 @@ async function handleInbound(cfg: GatewayConfig, inbound: InboundMessage): Promi
     const msg = err instanceof Error ? err.message : String(err);
     console.log(`Error: ${msg}`);
     debugLog(`[gateway] ERROR: ${msg}`);
+
+    // The opencode backend can be cut off (free-tier limits, filtering): say why instead of going silent.
+    if (err instanceof OpencodeBackendError) {
+      const formatted = formatForChannel(inbound.channel, err.userMessage);
+      try {
+        await (isGroup ? inbound.reply(formatted) : inbound.send(formatted));
+      } catch (sendErr) {
+        debugLog(`[gateway] failed to send error reply: ${sendErr instanceof Error ? sendErr.message : String(sendErr)}`);
+      }
+    }
   }
 }
 
