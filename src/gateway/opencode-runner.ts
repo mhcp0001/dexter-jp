@@ -233,9 +233,8 @@ export async function runOpencodeForMessage(req: OpencodeRunRequest): Promise<st
 
 /**
  * True when a run ended without a usable answer: no text, or only a plan that names our tools
- * without having called any. The MCP tools connect a moment after `opencode run` starts, so the
- * first model step can see no tools; the model then sometimes writes its plan and stops
- * (2 of 3 comparison questions in the #650 spike).
+ * without having called any. The model did this when the first step could not see the MCP tools
+ * (#650 spike); the wait-for-mcp plugin fixes the cause, and this retry stays as a backstop.
  */
 export function needsRetry(result: Pick<OpencodeRunResult, 'answer' | 'tools'>): boolean {
   return !result.answer || (result.tools.length === 0 && /\bdexter_[a-z_]+/.test(result.answer));
