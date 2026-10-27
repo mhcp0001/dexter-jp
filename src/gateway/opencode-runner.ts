@@ -1,16 +1,20 @@
 /**
  * DEXTER_BACKEND=opencode: hand each turn to an OpenCode agent instead of Dexter's own agent loop.
  *
- * OpenCode is the agent here. It calls the model itself (OpenCode's free-tier models only work
- * from OpenCode) and reaches Dexter's finance tools through the MCP server in src/mcp/server.ts.
- * This module only spawns `opencode run` and pulls the answer out of its JSON events.
+ * OpenCode is the agent here. It calls the model itself and reaches Dexter's finance tools
+ * through the MCP server in src/mcp/server.ts. This module only spawns `opencode run` and
+ * pulls the answer out of its JSON events.
  *
  * Environment:
- *   DEXTER_OPENCODE_BIN         opencode executable (default: "opencode" on PATH)
- *   DEXTER_OPENCODE_DIR         working directory holding opencode.json (default: cwd)
- *   DEXTER_OPENCODE_AGENT       agent name in opencode.json (default: "dexter")
- *   DEXTER_OPENCODE_MODEL       optional provider/model override passed as -m
- *   DEXTER_OPENCODE_TIMEOUT_MS  per-turn timeout (default: 600000)
+ *   DEXTER_OPENCODE_BIN             opencode executable (default: "opencode" on PATH)
+ *   DEXTER_OPENCODE_DIR             working directory holding opencode.json (default: cwd)
+ *   DEXTER_OPENCODE_AGENT           agent name in opencode.json (default: "dexter")
+ *   DEXTER_OPENCODE_MODEL           provider/model passed as -m. Set it: in v2.0.32 the session
+ *                                   model comes from the config root, not from the agent's model
+ *   DEXTER_OPENCODE_TIMEOUT_MS      per-turn timeout (default: 600000)
+ *   DEXTER_OPENCODE_MAX_CONCURRENT  turns running at once in this process (default: 1).
+ *                                   Each turn costs roughly 600 MB (opencode + MCP server)
+ *   OPENCODE_GO_API_KEY             passed through to OpenCode for the opencode-go provider
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -18,7 +22,11 @@ import { createHash } from 'node:crypto';
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MAX_DETAIL_CHARS = 300;
 // The OpenCode process never needs the gateway's credentials; the MCP server reads .env itself.
+// The one exception is the key OpenCode uses to call its own model provider.
 const SECRET_ENV_NAME = /(KEY|TOKEN|SECRET|PASSWORD)/i;
+const PASSED_SECRET_ENV = new Set(['OPENCODE_GO_API_KEY']);
+// Sent when a turn ends without text (the model announced tool calls, then stopped).
+const CONTINUE_PROMPT = '続けてください';
 
 /** A failure the user should hear about (quota, blocked model, timeout) rather than silence. */
 export class OpencodeBackendError extends Error {
@@ -96,18 +104,18 @@ function clip(text: string): string {
 export function describeOpencodeError(error: { type: string; message: string }): string {
   const detail = clip(`${error.type}: ${error.message}`);
   if (error.type === 'provider.quota') {
-    return `OpenCode の無料枠の利用上限に達したため、回答できませんでした。時間をおいて試してください（${detail}）`;
+    return `OpenCode の利用上限に達したため、回答できませんでした。時間をおいて試してください（${detail}）`;
   }
   if (error.type === 'provider.no-route') {
-    return `OpenCode のモデルが使えなくなっています。無料枠の終了や一覧からの削除が考えられます（${detail}）`;
+    return `OpenCode のモデルが使えなくなっています。提供の終了や一覧からの削除が考えられます（${detail}）`;
   }
   return `OpenCode でエラーが起き、回答できませんでした（${detail}）`;
 }
 
-function childEnv(dir: string): NodeJS.ProcessEnv {
+export function childEnv(dir: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [name, value] of Object.entries(process.env)) {
-    if (value !== undefined && !SECRET_ENV_NAME.test(name)) {
+    if (value !== undefined && (!SECRET_ENV_NAME.test(name) || PASSED_SECRET_ENV.has(name))) {
       env[name] = value;
     }
   }
@@ -118,11 +126,20 @@ function childEnv(dir: string): NodeJS.ProcessEnv {
 
 type ProcessOutput = { code: number | null; stdout: string; stderr: string; timedOut: boolean };
 
-function runProcess(bin: string, args: string[], dir: string, timeoutMs: number, signal?: AbortSignal): Promise<ProcessOutput> {
+function runProcess(
+  bin: string,
+  args: string[],
+  input: string,
+  dir: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<ProcessOutput> {
   return new Promise((resolve, reject) => {
-    // stdin must be closed: `opencode run` waits on an open stdin and never starts.
     // Its own process group, so a timeout also stops the MCP server it spawned.
-    const child = spawn(bin, args, { cwd: dir, env: childEnv(dir), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
+    const child = spawn(bin, args, { cwd: dir, env: childEnv(dir), stdio: ['pipe', 'pipe', 'pipe'], detached: true });
+    // `opencode run` reads the message from stdin until EOF. Leaving stdin open makes it wait forever.
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(input);
     let stdout = '';
     let stderr = '';
     let timedOut = false;
@@ -170,15 +187,40 @@ export type OpencodeRunRequest = {
   signal?: AbortSignal;
 };
 
+/**
+ * Caps how many turns run at once. A released slot is handed straight to the next waiter,
+ * so a caller arriving in between cannot push the count over the limit.
+ */
+export function createTurnLimiter(limit: () => number) {
+  let running = 0;
+  const waiting: Array<() => void> = [];
+  return async function withSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (running < limit()) {
+      running++;
+    } else {
+      await new Promise<void>((resolve) => waiting.push(resolve));
+    }
+    try {
+      return await fn();
+    } finally {
+      const next = waiting.shift();
+      if (next) next();
+      else running--;
+    }
+  };
+}
+
+const withTurnSlot = createTurnLimiter(() => Math.max(1, Number(process.env.DEXTER_OPENCODE_MAX_CONCURRENT) || 1));
+
 // Turns in the same OpenCode session must not overlap.
 const sessionTails = new Map<string, Promise<unknown>>();
 
 export async function runOpencodeForMessage(req: OpencodeRunRequest): Promise<string> {
   if (req.isolatedSession) {
-    return runOpencodeTurn(req);
+    return withTurnSlot(() => runOpencodeTurn(req));
   }
   const previous = sessionTails.get(req.sessionKey) ?? Promise.resolve();
-  const turn = previous.catch(() => undefined).then(() => runOpencodeTurn(req));
+  const turn = previous.catch(() => undefined).then(() => withTurnSlot(() => runOpencodeTurn(req)));
   sessionTails.set(req.sessionKey, turn);
   try {
     return await turn;
@@ -189,7 +231,36 @@ export async function runOpencodeForMessage(req: OpencodeRunRequest): Promise<st
   }
 }
 
+/**
+ * True when a run ended without a usable answer: no text, or only a plan that names our tools
+ * without having called any. The MCP tools connect a moment after `opencode run` starts, so the
+ * first model step can see no tools; the model then sometimes writes its plan and stops
+ * (2 of 3 comparison questions in the #650 spike).
+ */
+export function needsRetry(result: Pick<OpencodeRunResult, 'answer' | 'tools'>): boolean {
+  return !result.answer || (result.tools.length === 0 && /\bdexter_[a-z_]+/.test(result.answer));
+}
+
 async function runOpencodeTurn(req: OpencodeRunRequest): Promise<string> {
+  const sessionId = req.isolatedSession ? undefined : toOpencodeSessionId(req.sessionKey);
+  const first = await runAttempt(req, req.query, sessionId);
+  if (!needsRetry(first)) {
+    return first.answer;
+  }
+  // Retry once: continue the same session, or ask an isolated question again from scratch.
+  console.error(`[opencode] no answer, retrying once (${sessionId ? 'continue' : 'rerun'})`);
+  const retried = sessionId ? await runAttempt(req, CONTINUE_PROMPT, sessionId) : await runAttempt(req, req.query);
+  if (!needsRetry(retried)) {
+    return retried.answer;
+  }
+  throw new OpencodeBackendError(
+    'opencode returned no text',
+    'OpenCode が空の応答を返しました。モデルが答えを出さずに止まったか、遮断された可能性があります。もう一度試してください',
+  );
+}
+
+/** One `opencode run`. Returns the parsed events; throws on errors. */
+async function runAttempt(req: OpencodeRunRequest, input: string, sessionId?: string): Promise<OpencodeRunResult> {
   const bin = process.env.DEXTER_OPENCODE_BIN || 'opencode';
   const dir = process.env.DEXTER_OPENCODE_DIR || process.cwd();
   const agent = process.env.DEXTER_OPENCODE_AGENT || 'dexter';
@@ -199,16 +270,16 @@ async function runOpencodeTurn(req: OpencodeRunRequest): Promise<string> {
   if (process.env.DEXTER_OPENCODE_MODEL) {
     args.push('-m', process.env.DEXTER_OPENCODE_MODEL);
   }
-  if (!req.isolatedSession) {
-    args.push('--session', toOpencodeSessionId(req.sessionKey));
+  if (sessionId) {
+    args.push('--session', sessionId);
   }
-  // "--" keeps a query that starts with "-" from being read as a flag.
-  args.push('--', req.query);
+  // The message goes on stdin, not argv. In v2.0.32 a message after "--" is recorded twice,
+  // and an argument containing spaces is recorded wrapped in literal quotes.
 
   const startedAt = Date.now();
   let output: ProcessOutput;
   try {
-    output = await runProcess(bin, args, dir, timeoutMs, req.signal);
+    output = await runProcess(bin, args, input, dir, timeoutMs, req.signal);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     throw new OpencodeBackendError(`failed to start ${bin}: ${message}`, `OpenCode を起動できませんでした（${clip(message)}）`);
@@ -233,8 +304,5 @@ async function runOpencodeTurn(req: OpencodeRunRequest): Promise<string> {
     const detail = clip(output.stderr || output.stdout || `exit ${output.code}`);
     throw new OpencodeBackendError(`opencode exited with ${output.code}: ${detail}`, `OpenCode が異常終了しました（${detail}）`);
   }
-  if (!result.answer) {
-    throw new OpencodeBackendError('opencode returned no text', 'OpenCode が空の応答を返しました。無料枠のモデル側で遮断された可能性があります');
-  }
-  return result.answer;
+  return result;
 }
