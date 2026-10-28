@@ -8,9 +8,16 @@
 const SUFFIX = '_jp';
 
 // Field names that hold an amount of money (yen). Per-share values, ratios, counts and scores are
-// excluded even when their names contain one of these words.
-const MONEY_NAME = /(revenue|sales|income|profit|loss|assets|liabilities|equity|cash|cf_|_cf|capex|depreciation|expenses|debt|ibd_|inventories|goodwill|dividends_total|dividends_paid|surplus|earnings|land|buildings|turnover)/;
-const NOT_MONEY_NAME = /(per_share|eps|bps|ratio|rate|margin|yield|shares|count|score|pct|percent|growth|cagr|days|years|headcount|_id$)/;
+// excluded even when their names contain one of these words. The second line covers the balance
+// sheet items the first missed: DeepSeek V4.1 Flash wrote bonds_payable 2,671,312,000,000 as
+// 2,671億円 in the #650 comparison because the field had no reading.
+const MONEY_NAME = new RegExp(
+  '(revenue|sales|income|profit|loss|asset|liabilit|equity|cash|cf_|_cf|capex|depreciation|expenses|debt|ibd_|inventories|goodwill|dividends?_total|dividends_paid|surplus|earnings|land|buildings|turnover' +
+    '|bonds|loans|borrowings|papers|(^|_)lease|payable|receivable|advances|allowance|securities|stock|interests|machinery|construction|software|book_value|remuneration|amount|(^|_)(ppe|sga)($|_))',
+);
+// ratio, rate and count match only as whole parts of the name: remuneration contains "ratio" and
+// allowance_for_doubtful_accounts contains "count".
+const NOT_MONEY_NAME = /(per_share|eps|bps|(^|_)(ratio|rate|count)s?($|_)|margin|yield|shares|score|pct|percent|growth|cagr|days|years|headcount|_id$)/;
 const MIN_YEN = 1e8;
 
 export function isMoneyField(name: string): boolean {
