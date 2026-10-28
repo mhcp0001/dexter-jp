@@ -1,6 +1,7 @@
 import { Agent } from '../agent/agent.js';
 import { InMemoryChatHistory } from '../utils/in-memory-chat-history.js';
 import { HEARTBEAT_OK_TOKEN } from './heartbeat/suppression.js';
+import { isOpencodeBackend, runOpencodeForMessage } from './opencode-runner.js';
 import type { AgentEvent } from '../agent/types.js';
 import type { GroupContext } from '../agent/prompts.js';
 
@@ -40,6 +41,10 @@ export type AgentRunRequest = {
 };
 
 export async function runAgentForMessage(req: AgentRunRequest): Promise<string> {
+  if (isOpencodeBackend()) {
+    return runOpencodeForMessage(req);
+  }
+
   const isolated = req.isolatedSession ?? false;
   const session = isolated ? null : getSession(req.sessionKey, req.model);
   let finalAnswer = '';
