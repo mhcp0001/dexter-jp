@@ -44,6 +44,23 @@ function getApiKey(): string {
   return process.env.EDINETDB_API_KEY || '';
 }
 
+// Upper bound on network requests to EDINET DB in this process (null = no limit).
+// The MCP server runs once per OpenCode turn, so this caps one turn; EDINET DB's free plan
+// allows 100 requests a day (mhcp0001/homelab-infrastructure#848). Cache hits are not counted.
+let requestBudget: number | null = null;
+let requestsMade = 0;
+
+/** Set (or clear with null) the per-process request budget, and reset the count. */
+export function setRequestBudget(limit: number | null): void {
+  requestBudget = limit;
+  requestsMade = 0;
+}
+
+export function requestBudgetExceededMessage(limit: number): string {
+  return `[EDINET DB API] request budget for this turn reached (${limit} requests). ` +
+    'Answer with the figures already retrieved and say which ones could not be fetched.';
+}
+
 /**
  * Shared request execution: handles API key, error handling, logging, and response parsing.
  */
@@ -52,6 +69,14 @@ async function executeRequest(
   label: string,
   init: RequestInit,
 ): Promise<Record<string, unknown>> {
+  if (requestBudget !== null) {
+    if (requestsMade >= requestBudget) {
+      logger.warn(`[EDINET DB API] budget reached (${requestBudget}): ${label}`);
+      throw new Error(requestBudgetExceededMessage(requestBudget));
+    }
+    requestsMade += 1;
+  }
+
   const apiKey = getApiKey();
 
   if (!apiKey) {
