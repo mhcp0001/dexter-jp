@@ -29,17 +29,20 @@ import {
   getTextBlocks,
   isJQuantsAvailable,
 } from '../tools/finance/index.js';
-import { api } from '../tools/finance/api.js';
+import { api, setRequestBudget } from '../tools/finance/api.js';
 import { AVAILABLE_METRICS, ScreenerConditionSchema, runScreener } from '../tools/finance/screen-companies.js';
 import { tavilySearch } from '../tools/search/index.js';
 import { formatToolResult } from '../tools/types.js';
 import { annotateAmounts, annotateToolText } from './amounts.js';
 import { describeArguments, lenientSchema, normalizeArguments } from './lenient-args.js';
+import { dropUnusedSecrets, edinetBudgetFromEnv } from './env.js';
 
 // Run from the repo root so .env and .dexter/cache resolve exactly as they do for the gateway,
 // whatever directory the MCP client starts us in.
 process.chdir(join(dirname(fileURLToPath(import.meta.url)), '../..'));
 config({ quiet: true });
+dropUnusedSecrets(process.env);
+setRequestBudget(edinetBudgetFromEnv(process.env));
 
 const INSTRUCTIONS = `
 Financial data for Japanese listed companies (EDINET DB, J-Quants).
