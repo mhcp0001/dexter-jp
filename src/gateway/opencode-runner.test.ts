@@ -221,6 +221,14 @@ f="${dir}/resp-$n.jsonl"; [ -f "$f" ] || f="${dir}/resp-${responses.length}.json
     expect(readFileSync(join(dir, 'count'), 'utf8').trim()).toBe('1');
   });
 
+  test('a failed tool call\'s message counts as a source', async () => {
+    const failed = { type: 'tool_use', sessionID: 'ses_s', part: { tool: 'dexter_get_financial_statements', state: { status: 'error', input: { ticker: '7203' }, error: { message: '[EDINET DB API] request failed: 429 Too Many Requests' } } } };
+    const dir = scripted([failed, text('EDINET DB が 429 を返したため、売上高は取れませんでした。')]);
+    const answer = await runOpencodeForMessage({ sessionKey: 'oneshot', query: 'q', isolatedSession: true });
+    expect(answer).toBe('EDINET DB が 429 を返したため、売上高は取れませんでした。');
+    expect(readFileSync(join(dir, 'count'), 'utf8').trim()).toBe('1');
+  });
+
   test('the check can be turned off', async () => {
     process.env.DEXTER_ANSWER_CHECK_ROUNDS = '0';
     const dir = scripted([tool('終値 4,702'), text('ドル円は157.95円です。')]);

@@ -54,7 +54,7 @@ export function toOpencodeSessionId(sessionKey: string): string {
 type OpencodeEvent = {
   type?: string;
   sessionID?: string;
-  part?: { text?: string; tool?: string; state?: { status?: string; input?: unknown; output?: unknown } };
+  part?: { text?: string; tool?: string; state?: { status?: string; input?: unknown; output?: unknown; error?: unknown } };
   error?: { type?: string; message?: string };
 };
 
@@ -97,6 +97,8 @@ export function parseOpencodeEvents(stdout: string): OpencodeRunResult {
       if (state) {
         if (state.input !== undefined) result.sources.push(JSON.stringify(state.input));
         if (state.output !== undefined) result.sources.push(typeof state.output === 'string' ? state.output : JSON.stringify(state.output));
+        // a failed call's message is a source too: the answer may quote it ("429", the covered dates)
+        if (state.error !== undefined) result.sources.push(typeof state.error === 'string' ? state.error : JSON.stringify(state.error));
       }
     } else if (event.type === 'error') {
       result.error = { type: event.error?.type ?? 'unknown', message: event.error?.message ?? '' };
