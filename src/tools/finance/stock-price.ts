@@ -43,7 +43,10 @@ async function jquantsGet(
   });
 
   if (!response.ok) {
-    const detail = `${response.status} ${response.statusText}`;
+    // Keep the body: on the free plan, a range outside the subscription comes back as 400 with
+    // the covered dates in the message, which the model needs to explain the gap.
+    const body = (await response.text().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 300);
+    const detail = `${response.status} ${response.statusText}${body ? ` - ${body}` : ''}`;
     logger.error(`[J-Quants] API error: ${detail}`);
     throw new Error(`J-Quants API error: ${detail}`);
   }
