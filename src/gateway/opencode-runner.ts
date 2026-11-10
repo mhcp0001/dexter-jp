@@ -15,9 +15,12 @@
  *   DEXTER_OPENCODE_MAX_CONCURRENT  turns running at once in this process (default: 1).
  *                                   Each turn costs roughly 600 MB (opencode + MCP server)
  *   OPENCODE_GO_API_KEY             passed through to OpenCode for the opencode-go provider
+ *   DEXTER_ANSWER_CHECK_ROUNDS      rewrites asked for when the answer check finds figures no tool
+ *                                   returned (default: 2, 0 = check off). See answer-check.ts
  */
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { buildFixPrompt, checkAnswer, hasProblems, tablesToBullets, unverifiedFooter, type CheckResult } from './answer-check.js';
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const MAX_DETAIL_CHARS = 300;
@@ -51,7 +54,7 @@ export function toOpencodeSessionId(sessionKey: string): string {
 type OpencodeEvent = {
   type?: string;
   sessionID?: string;
-  part?: { text?: string; tool?: string };
+  part?: { text?: string; tool?: string; state?: { status?: string; input?: unknown; output?: unknown; error?: unknown } };
   error?: { type?: string; message?: string };
 };
 
@@ -59,6 +62,8 @@ export type OpencodeRunResult = {
   answer: string;
   sessionId?: string;
   tools: string[];
+  /** Text of each tool call's input and output, for the answer check. */
+  sources: string[];
   error?: { type: string; message: string };
 };
 
@@ -68,7 +73,7 @@ export type OpencodeRunResult = {
  * narration around tool calls.
  */
 export function parseOpencodeEvents(stdout: string): OpencodeRunResult {
-  const result: OpencodeRunResult = { answer: '', tools: [] };
+  const result: OpencodeRunResult = { answer: '', tools: [], sources: [] };
   let stepTexts: string[] = [];
 
   for (const line of stdout.split('\n')) {
@@ -88,6 +93,13 @@ export function parseOpencodeEvents(stdout: string): OpencodeRunResult {
       result.answer = stepTexts.join('\n\n').trim();
     } else if (event.type === 'tool_use' && event.part?.tool) {
       result.tools.push(event.part.tool);
+      const state = event.part.state;
+      if (state) {
+        if (state.input !== undefined) result.sources.push(JSON.stringify(state.input));
+        if (state.output !== undefined) result.sources.push(typeof state.output === 'string' ? state.output : JSON.stringify(state.output));
+        // a failed call's message is a source too: the answer may quote it ("429", the covered dates)
+        if (state.error !== undefined) result.sources.push(typeof state.error === 'string' ? state.error : JSON.stringify(state.error));
+      }
     } else if (event.type === 'error') {
       result.error = { type: event.error?.type ?? 'unknown', message: event.error?.message ?? '' };
     }
@@ -242,20 +254,79 @@ export function needsRetry(result: Pick<OpencodeRunResult, 'answer' | 'tools'>):
 
 async function runOpencodeTurn(req: OpencodeRunRequest): Promise<string> {
   const sessionId = req.isolatedSession ? undefined : toOpencodeSessionId(req.sessionKey);
-  const first = await runAttempt(req, req.query, sessionId);
-  if (!needsRetry(first)) {
-    return first.answer;
+  let result = await runAttempt(req, req.query, sessionId);
+  const sources = [...result.sources];
+  if (needsRetry(result)) {
+    // Retry once: continue the same session, or ask an isolated question again from scratch.
+    console.error(`[opencode] no answer, retrying once (${sessionId ? 'continue' : 'rerun'})`);
+    result = sessionId ? await runAttempt(req, CONTINUE_PROMPT, sessionId) : await runAttempt(req, req.query);
+    sources.push(...result.sources);
+    if (needsRetry(result)) {
+      throw new OpencodeBackendError(
+        'opencode returned no text',
+        'OpenCode が空の応答を返しました。モデルが答えを出さずに止まったか、遮断された可能性があります。もう一度試してください',
+      );
+    }
   }
-  // Retry once: continue the same session, or ask an isolated question again from scratch.
-  console.error(`[opencode] no answer, retrying once (${sessionId ? 'continue' : 'rerun'})`);
-  const retried = sessionId ? await runAttempt(req, CONTINUE_PROMPT, sessionId) : await runAttempt(req, req.query);
-  if (!needsRetry(retried)) {
-    return retried.answer;
+  return checkAndFix(req, result.answer, sessionId ?? result.sessionId, sources);
+}
+
+// Tool outputs seen in each gateway session, so a follow-up answer can cite an earlier turn's values.
+const sessionSources = new Map<string, string[]>();
+const MAX_SESSION_SOURCE_CHARS = 2_000_000;
+
+function rememberSources(sessionKey: string, sources: string[]): string[] {
+  const all = [...(sessionSources.get(sessionKey) ?? []), ...sources];
+  let total = all.reduce((n, s) => n + s.length, 0);
+  while (all.length > 1 && total > MAX_SESSION_SOURCE_CHARS) total -= all.shift()!.length;
+  sessionSources.set(sessionKey, all);
+  return all;
+}
+
+function answerCheckRounds(): number {
+  const n = Number(process.env.DEXTER_ANSWER_CHECK_ROUNDS ?? 2);
+  return Number.isInteger(n) && n >= 0 ? n : 2;
+}
+
+function problemCount(r: CheckResult): number {
+  return r.unverified.length + r.oddScripts.length + r.unknownWords.length;
+}
+
+function describeCheck(r: CheckResult): string {
+  return `unverified=${r.unverified.join('|') || '-'} odd=${r.oddScripts.join('') || '-'} words=${r.unknownWords.join('|') || '-'}`;
+}
+
+/**
+ * Check the answer against the tool outputs (#864). When figures no tool returned or words from other
+ * languages show up, send the findings back to the same session and ask for a rewrite, up to
+ * DEXTER_ANSWER_CHECK_ROUNDS times. A rewrite is kept only when it has fewer problems. Figures still
+ * unverified at the end are listed under the answer, so the user never reads them as checked.
+ */
+async function checkAndFix(req: OpencodeRunRequest, answer: string, sessionId: string | undefined, turnSources: string[]): Promise<string> {
+  const rounds = answerCheckRounds();
+  if (rounds === 0) return tablesToBullets(answer);
+  const sources = req.isolatedSession ? [...turnSources] : rememberSources(req.sessionKey, turnSources);
+  let best = answer;
+  let check = checkAnswer(best, sources);
+  for (let round = 1; round <= rounds && hasProblems(check) && sessionId; round++) {
+    console.error(`[answer-check] round=${round} ${describeCheck(check)}`);
+    let fixed: OpencodeRunResult;
+    try {
+      fixed = await runAttempt(req, buildFixPrompt(check), sessionId);
+    } catch (err) {
+      console.error(`[answer-check] rewrite failed: ${err instanceof Error ? err.message : String(err)}`);
+      break;
+    }
+    sources.push(...fixed.sources);
+    if (!req.isolatedSession) rememberSources(req.sessionKey, fixed.sources);
+    if (!fixed.answer) break;
+    const next = checkAnswer(fixed.answer, sources);
+    if (problemCount(next) > problemCount(check)) break;
+    best = fixed.answer;
+    check = next;
   }
-  throw new OpencodeBackendError(
-    'opencode returned no text',
-    'OpenCode が空の応答を返しました。モデルが答えを出さずに止まったか、遮断された可能性があります。もう一度試してください',
-  );
+  console.error(`[answer-check] final ${describeCheck(check)}`);
+  return tablesToBullets(best) + unverifiedFooter(check);
 }
 
 /** One `opencode run`. Returns the parsed events; throws on errors. */
