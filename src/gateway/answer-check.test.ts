@@ -83,3 +83,42 @@ describe('derived figures', () => {
     expect(checkAnswer(answer, ['4,702 4,542']).unverified).toEqual([]);
   });
 });
+
+describe('ratios and percentage points (2026-11-11 Discord turn)', () => {
+  const FIN = JSON.stringify({ data: [
+    { fiscal_year: 2026, revenue: 50684952000000, revenue_jp: '50兆6,850億円', operating_income: 3766216000000, operating_income_jp: '3兆7,662億円', equity_ratio: 36.2, roe: 3.6 },
+    { fiscal_year: 2025, revenue: 48036704000000, revenue_jp: '48兆367億円', operating_income: 4795586000000, operating_income_jp: '4兆7,956億円' },
+  ] });
+
+  test('a decimal ratio written next to its inputs passes', () => {
+    const answer = '営業利益率は 3兆7,662億円 ÷ 50兆6,850億円 ＝ 約0.0743 ＝ 7.4%。';
+    expect(checkAnswer(answer, [FIN]).unverified).toEqual([]);
+  });
+
+  test('a wrong pt difference is caught even when the number appears elsewhere in the tool output', () => {
+    const answer = '利益率は前年10.0%（4兆7,956億円 ÷ 48兆367億円）から今期7.4%（3兆7,662億円 ÷ 50兆6,850億円）へ、3.6pt低下。';
+    expect(checkAnswer(answer, [FIN]).unverified).toEqual(['3.6pt']);
+    expect(checkAnswer(answer.replace('3.6pt', '2.6pt'), [FIN]).unverified).toEqual([]);
+  });
+
+  test('a percentage is matched only against percentages in the sources', () => {
+    expect(checkAnswer('自己資本比率は36.2%。', [FIN]).unverified).toEqual([]);
+    expect(checkAnswer('利益率は52.0%。', ['出来高 52.0 万株']).unverified).toEqual(['52.0%']);
+  });
+});
+
+describe('inputs on the same line', () => {
+  const SRC = '売上高 50兆6,850億円 21兆7,966億円 12兆79億円 営業利益 3兆7,662億円 4,143億円 580億円';
+  test('a computation needs its inputs on its own line; a checked figure may be repeated', () => {
+    const answer = [
+      '- トヨタ: 3兆7,662億円 ÷ 50兆6,850億円 ＝ 7.4%',
+      '- ホンダ: 4,143億円 ÷ 21兆7,966億円 ＝ 1.9%',
+      'トヨタは7.4%、ホンダは1.9%。売上はホンダの2.3倍。',
+    ].join('\n');
+    expect(checkAnswer(answer, [SRC]).unverified).toEqual(['2.3倍']);
+  });
+
+  test('raw yen may be written in millions', () => {
+    expect(checkAnswer('元データ: 3,766,216 ÷ 50,684,952', ['{"operating_income":3766216000000,"revenue":50684952000000}']).unverified).toEqual([]);
+  });
+});

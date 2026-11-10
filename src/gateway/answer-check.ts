@@ -15,7 +15,7 @@
  * Markdown tables are turned into bullet lists, since Discord shows them as raw `|` characters.
  */
 
-export type Claim = { raw: string; value: number; tol: number; kind: 'plain' | 'percent' | 'times' | 'amount' };
+export type Claim = { raw: string; value: number; tol: number; kind: 'plain' | 'percent' | 'points' | 'times' | 'amount'; line?: number };
 
 export type CheckResult = {
   unverified: string[];
@@ -42,7 +42,7 @@ const NOT_FIGURES = [
 ];
 
 // A number, optionally a compound Japanese amount (5兆6,140億), then an optional unit.
-const NUMBER = /(\d[\d,]*(?:\.\d+)?)(?:\s*(兆)(?:\s*(\d[\d,]*(?:\.\d+)?)\s*(億))?|\s*(億|万))?\s*(%|％|倍|円|株|ドル)?/g;
+const NUMBER = /(\d[\d,]*(?:\.\d+)?)(?:\s*(兆)(?:\s*(\d[\d,]*(?:\.\d+)?)\s*(億))?|\s*(億|万))?\s*(%|％|pt|ポイント|倍|円|株|ドル)?/g;
 
 function toNumber(text: string): number {
   return Number(text.replace(/,/g, ''));
@@ -68,7 +68,7 @@ function parseAt(match: RegExpExecArray): Claim | null {
   const value = toNumber(first);
   if (!Number.isFinite(value)) return null;
   const tol = lastDigitUnit(first, 1);
-  const kind = suffix === '%' || suffix === '％' ? 'percent' : suffix === '倍' ? 'times' : 'plain';
+  const kind = suffix === '%' || suffix === '％' ? 'percent' : suffix === 'pt' || suffix === 'ポイント' ? 'points' : suffix === '倍' ? 'times' : 'plain';
   return { raw: raw.trim(), value, tol, kind };
 }
 
@@ -85,6 +85,7 @@ export function extractClaims(answer: string): Claim[] {
   for (const m of text.matchAll(NUMBER)) {
     const c = parseAt(m as RegExpExecArray);
     if (!c) continue;
+    c.line = text.slice(0, m.index).split('\n').length - 1;
     const digits = m[1].replace(/,/g, '');
     const isSmallCount = c.kind === 'plain' && !digits.includes('.') && Math.abs(c.value) < 100;
     const isYear = c.kind === 'plain' && /^(19|20)\d{2}$/.test(digits);
@@ -94,21 +95,41 @@ export function extractClaims(answer: string): Claim[] {
   return claims;
 }
 
-/** Every number in the tool outputs, with the scaled forms an answer may use. */
-export function sourceValues(sources: string[]): number[] {
-  const values = new Set<number>();
+export type SourceValues = { all: number[]; percent: number[]; points: number[] };
+
+// Keys whose values are rates or ratios (EDINET DB: operating_margin, revenue_change, equity_ratio ...)
+const RATE_KEY = /"([a-z_]*(?:ratio|margin|rate|change|yield|roe|roa|roic|growth|pct|percent)[a-z_]*)"\s*:\s*(-?\d+(?:\.\d+)?)/gi;
+const PERCENT_TEXT = /(-?\d[\d,]*(?:\.\d+)?)\s*[%％]/g;
+const POINTS_TEXT = /(-?\d[\d,]*(?:\.\d+)?)\s*(?:pt|ポイント)/g;
+
+/**
+ * Every number in the tool outputs, and separately the percentages and the point differences. A %
+ * figure in an answer is checked only against percentages, and a pt figure only against figures the
+ * sources write as pt / ポイント (otherwise it must be the difference of two % figures in the answer):
+ * small numbers like 3.6 turn up somewhere in any large tool output (roe: 3.6), which let a wrong
+ * "3.6pt" through on 2026-11-11 (#864).
+ */
+export function sourceValues(sources: string[]): SourceValues {
+  const all = new Set<number>();
+  const percent = new Set<number>();
+  const points = new Set<number>();
   for (const text of sources) {
+    for (const m of text.matchAll(POINTS_TEXT)) points.add(toNumber(m[1]));
     for (const m of text.matchAll(NUMBER)) {
       const c = parseAt(m as RegExpExecArray);
       if (!c) continue;
-      values.add(c.value);
-      if (c.kind !== 'amount') {
-        // 0.1012 → 10.12 (%); also negative values written without the sign (▲4,143億円)
-        if (Math.abs(c.value) < 1) values.add(c.value * 100);
-      }
+      all.add(c.value);
+      // raw yen also written in millions (3766216000000 → 3,766,216 百万円)
+      if (c.kind === 'plain' && Math.abs(c.value) >= 1e8 && c.value % 1e6 === 0) all.add(c.value / 1e6);
+    }
+    for (const m of text.matchAll(PERCENT_TEXT)) percent.add(toNumber(m[1]));
+    for (const m of text.matchAll(RATE_KEY)) {
+      const v = Number(m[2]);
+      percent.add(v);
+      if (Math.abs(v) < 1) percent.add(v * 100); // 0.0743 → 7.43 %
     }
   }
-  return [...values];
+  return { all: [...all], percent: [...percent], points: [...points] };
 }
 
 function hasNear(values: number[], target: number, tol: number): boolean {
@@ -121,11 +142,13 @@ function hasNear(values: number[], target: number, tol: number): boolean {
  * Whether c can be computed from two other figures in the answer. Only the computations an analyst
  * writes are allowed, by kind, so that an invented number rarely matches by chance:
  *   %   : a / b × 100, growth (a / b − 1) × 100        倍 : a / b
+ *   pt  : difference of two % figures                   0.0743 (a plain decimal below 1) : a / b
  *   amounts and plain figures: a − b, a + b of the same kind (difference of two prices, sum of two companies)
  */
 function derivable(c: Claim, inputs: Claim[]): boolean {
   const target = Math.abs(c.value);
-  const rounding = c.kind === 'percent' || c.kind === 'times' ? Math.max(c.tol, target * 0.005) : c.tol * 1.5;
+  const rounded = c.kind === 'percent' || c.kind === 'points' || c.kind === 'times' || isDecimalRatio(c);
+  const rounding = rounded ? Math.max(c.tol, target * 0.005) : c.tol * 1.5;
   for (const a of inputs) {
     for (const b of inputs) {
       if (a === b) continue;
@@ -133,12 +156,19 @@ function derivable(c: Claim, inputs: Claim[]): boolean {
       const y = Math.abs(b.value);
       let candidates: number[] = [];
       if (c.kind === 'percent' && y !== 0) candidates = [(x / y) * 100, (x / y - 1) * 100, (1 - x / y) * 100];
+      else if (c.kind === 'points' && a.kind === 'percent' && b.kind === 'percent') candidates = [x - y];
       else if (c.kind === 'times' && y !== 0) candidates = [x / y];
+      else if (isDecimalRatio(c) && y !== 0 && a.kind !== 'percent' && b.kind !== 'percent') candidates = [x / y];
       else if ((c.kind === 'amount' || c.kind === 'plain') && a.kind === c.kind && b.kind === c.kind) candidates = [x - y, x + y];
       if (candidates.some((v) => Math.abs(Math.abs(v) - target) <= rounding)) return true;
     }
   }
   return false;
+}
+
+/** A plain decimal below 1 such as 0.0743: a ratio written before turning it into a percentage. */
+function isDecimalRatio(c: Claim): boolean {
+  return c.kind === 'plain' && c.raw.includes('.') && Math.abs(c.value) < 1;
 }
 
 // Latin-1 letters only: × (U+00D7) and ÷ (U+00F7) are math signs an answer may use
@@ -151,12 +181,24 @@ const KNOWN_WORDS = new Set(['edinet', 'quants', 'yahoo', 'tdnet', 'discord', 'o
 export function checkAnswer(answer: string, sources: string[]): CheckResult {
   const claims = extractClaims(answer);
   const values = sourceValues(sources);
-  const sourced = claims.filter((c) => hasNear(values, c.value, c.tol));
+  const sourced = claims.filter((c) =>
+    c.kind === 'percent'
+      ? hasNear(values.percent, c.value, c.tol)
+      : c.kind === 'points'
+        ? hasNear(values.points, c.value, c.tol)
+        : hasNear(values.all, c.value, c.tol),
+  );
   // two passes: a figure computed from sourced figures may feed another computation
   const verified = new Set<Claim>(sourced);
+  // the inputs of a computation must be written in the same line, as the prompt asks; across the whole
+  // answer some pair of rounded figures matches almost any small number (5.6 − 1.9 ≈ 3.6, 2026-11-11)
   for (let pass = 0; pass < 2; pass++) {
     for (const c of claims) {
-      if (!verified.has(c) && derivable(c, [...verified])) verified.add(c);
+      if (!verified.has(c) && derivable(c, [...verified].filter((v) => v.line === c.line))) verified.add(c);
+    }
+    // a figure already checked elsewhere in the answer may be repeated (a summary line restating 7.4%)
+    for (const c of claims) {
+      if (!verified.has(c) && [...verified].some((v) => v.kind === c.kind && Math.abs(Math.abs(v.value) - Math.abs(c.value)) <= Math.max(v.tol, c.tol))) verified.add(c);
     }
   }
   const unverified = [...new Set(claims.filter((c) => !verified.has(c)).map((c) => c.raw))];
