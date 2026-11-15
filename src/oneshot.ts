@@ -74,5 +74,11 @@ if (answer === null || answer.trim() === '') {
   console.error('[oneshot] no answer');
   process.exit(1);
 }
+// The agents put a failed model call into the answer ("Error: …", the SDK's "API Error: …").
+// Report it as a failure so a caller comparing models does not take it for an answer.
+if (/^(API )?Error: /.test(answer.trim())) {
+  console.error(`[oneshot] failed: ${answer.trim().slice(0, 500)}`);
+  process.exit(1);
+}
 console.log(answer);
 process.exit(0);
