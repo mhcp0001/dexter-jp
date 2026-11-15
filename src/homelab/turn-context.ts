@@ -5,9 +5,13 @@
  * AsyncLocalStorage rather than module globals:
  * - `goSession`: the stable `x-opencode-session` header OpenCode Go asks clients to send
  * - `edinetBudget` / `edinetUsed`: the EDINET DB request cap for one turn (100 a day on the free plan)
+ *
+ * A daily cap is kept in a file so the gateway, cron and every oneshot process share it (homelab#906 H-2).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, randomUUID } from 'node:crypto';
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 export type TurnContext = {
   goSession: string;
@@ -55,15 +59,65 @@ export function edinetBudgetExceededMessage(limit: number): string {
     'Answer with the figures already retrieved and say which ones could not be fetched.';
 }
 
+export const DEFAULT_EDINET_DAILY_MAX = 80;
+
+/** Requests allowed per day across all processes. DEXTER_EDINET_DAILY_MAX: positive integer, or 0 for no limit. */
+export function edinetDailyMaxFromEnv(env: NodeJS.ProcessEnv = process.env): number | null {
+  const raw = env.DEXTER_EDINET_DAILY_MAX?.trim();
+  if (raw === undefined || raw === '' || !/^\d+$/.test(raw)) return DEFAULT_EDINET_DAILY_MAX;
+  const n = Number(raw);
+  return n === 0 ? null : n;
+}
+
+/** The date in Japan (EDINET DB's day). */
+export function jstDate(now: Date = new Date()): string {
+  return new Date(now.getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+function dailyFile(env: NodeJS.ProcessEnv = process.env): string {
+  return env.DEXTER_EDINET_DAILY_FILE || '.dexter/edinet-daily.json';
+}
+
 /**
- * Count one EDINET DB network request against the current turn.
- * Outside a turn (CLI) there is no limit. Throws when the turn's budget is used up.
+ * Count one request against today's cap in the shared file. Read-modify-write without a lock:
+ * two processes racing can lose a count, which is acceptable for a soft guard under a hard 100.
+ */
+export function chargeEdinetDaily(env: NodeJS.ProcessEnv = process.env, now: Date = new Date()): void {
+  const limit = edinetDailyMaxFromEnv(env);
+  if (limit === null) return;
+  const file = dailyFile(env);
+  const today = jstDate(now);
+  let used = 0;
+  try {
+    const data = JSON.parse(readFileSync(file, 'utf8')) as { date?: string; used?: number };
+    if (data.date === today && Number.isInteger(data.used)) used = data.used as number;
+  } catch {
+    // no file yet, or unreadable: start from zero
+  }
+  if (used >= limit) {
+    throw new Error(`[EDINET DB API] daily budget reached (${limit} requests today). ` +
+      'Answer with what is already known and say that EDINET DB could not be queried until tomorrow.');
+  }
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ date: today, used: used + 1 }));
+  renameSync(tmp, file);
+}
+
+/**
+ * Count one EDINET DB network request: today's cap always (also outside a turn), and the
+ * current turn's cap when inside one. Throws when either is used up.
  */
 export function chargeEdinetRequest(): void {
   const ctx = storage.getStore();
-  if (!ctx || ctx.edinetBudget === null) return;
-  if (ctx.edinetUsed >= ctx.edinetBudget) {
+  if (ctx && ctx.edinetBudget !== null && ctx.edinetUsed >= ctx.edinetBudget) {
     throw new Error(edinetBudgetExceededMessage(ctx.edinetBudget));
   }
-  ctx.edinetUsed += 1;
+  chargeEdinetDaily();
+  if (ctx) ctx.edinetUsed += 1;
+}
+
+/** Whether gateway sessions read and write memory. DEXTER_GATEWAY_MEMORY=0 turns it off (homelab#906 M-1). */
+export function gatewayMemoryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return !['0', 'false', 'no', 'off'].includes((env.DEXTER_GATEWAY_MEMORY ?? '').trim().toLowerCase());
 }

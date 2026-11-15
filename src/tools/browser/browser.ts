@@ -273,6 +273,19 @@ const actRequestSchema = z.object({
   timeMs: z.number().optional().describe('Wait time in milliseconds'),
 });
 
+/**
+ * Only web pages: file://, data:, chrome:// and the like would let a prompt read local files
+ * such as .env through the browser (homelab#906 C-1).
+ */
+export function isWebUrl(raw: string): boolean {
+  try {
+    const { protocol } = new URL(raw);
+    return protocol === 'http:' || protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 export const browserTool = new DynamicStructuredTool({
   name: 'browser',
   description: 'Navigate websites, read content, and interact with pages. Use for accessing company websites, earnings reports, and dynamic content.',
@@ -289,6 +302,9 @@ export const browserTool = new DynamicStructuredTool({
           if (!url) {
             return formatToolResult({ error: 'url is required for navigate action' });
           }
+          if (!isWebUrl(url)) {
+            return formatToolResult({ error: 'only http and https URLs can be opened' });
+          }
           const p = await ensureBrowser();
           // Use networkidle for better JS rendering on dynamic sites
           await p.goto(url, { timeout: 30000, waitUntil: 'networkidle' });
@@ -303,6 +319,9 @@ export const browserTool = new DynamicStructuredTool({
         case 'open': {
           if (!url) {
             return formatToolResult({ error: 'url is required for open action' });
+          }
+          if (!isWebUrl(url)) {
+            return formatToolResult({ error: 'only http and https URLs can be opened' });
           }
           const currentPage = await ensureBrowser();
           const context = currentPage.context();

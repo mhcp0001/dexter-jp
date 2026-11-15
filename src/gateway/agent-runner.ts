@@ -4,7 +4,7 @@ import { createMessageQueue, type MessageQueue, type QueuePriority } from '../ut
 import { HEARTBEAT_OK_TOKEN } from './heartbeat/suppression.js';
 import type { AgentEvent } from '../agent/types.js';
 import type { GroupContext } from '../agent/prompts.js';
-import { runTurn } from '../homelab/turn-context.js';
+import { gatewayMemoryEnabled, runTurn } from '../homelab/turn-context.js';
 
 type SessionState = {
   history: InMemoryChatHistory;
@@ -98,7 +98,7 @@ async function runAgentForMessageInTurn(req: AgentRunRequest): Promise<string> {
       signal: req.signal,
       channel: req.channel,
       groupContext: req.groupContext,
-      memoryEnabled: !isolated,
+      memoryEnabled: !isolated && gatewayMemoryEnabled(),
       messageQueue: session?.queue,
     });
 
@@ -122,7 +122,7 @@ async function runAgentForMessageInTurn(req: AgentRunRequest): Promise<string> {
         signal: req.signal,
         channel: req.channel,
         groupContext: req.groupContext,
-        memoryEnabled: !isolated,
+        memoryEnabled: !isolated && gatewayMemoryEnabled(),
         messageQueue: session.queue,
       });
 

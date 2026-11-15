@@ -1,12 +1,55 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
+  chargeEdinetDaily,
   chargeEdinetRequest,
+  edinetDailyMaxFromEnv,
+  gatewayMemoryEnabled,
+  jstDate,
   currentGoSession,
   DEFAULT_EDINET_MAX_CALLS,
   edinetBudgetFromEnv,
   goSessionFor,
   runTurn,
 } from './turn-context';
+
+let dir = '';
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), 'dexter-tc-'));
+  process.env.DEXTER_EDINET_DAILY_FILE = join(dir, 'daily.json');
+  process.env.DEXTER_EDINET_DAILY_MAX = '0';
+});
+afterAll(() => {
+  delete process.env.DEXTER_EDINET_DAILY_FILE;
+  delete process.env.DEXTER_EDINET_DAILY_MAX;
+  rmSync(dir, { recursive: true, force: true });
+});
+
+describe('daily EDINET cap and gateway memory (homelab#906)', () => {
+  test('daily cap counts across calls, resets on a new JST day', () => {
+    const env = { DEXTER_EDINET_DAILY_MAX: '2', DEXTER_EDINET_DAILY_FILE: join(dir, 'cap.json') } as NodeJS.ProcessEnv;
+    const day1 = new Date('2026-11-16T03:00:00Z');
+    chargeEdinetDaily(env, day1);
+    chargeEdinetDaily(env, day1);
+    expect(() => chargeEdinetDaily(env, day1)).toThrow(/daily budget reached \(2/);
+    // 15:30 UTC is already the next day in Japan
+    chargeEdinetDaily(env, new Date('2026-11-16T15:30:00Z'));
+  });
+
+  test('daily cap settings', () => {
+    expect(edinetDailyMaxFromEnv({})).toBe(80);
+    expect(edinetDailyMaxFromEnv({ DEXTER_EDINET_DAILY_MAX: '0' })).toBeNull();
+    expect(jstDate(new Date('2026-11-16T14:59:00Z'))).toBe('2026-11-16');
+    expect(jstDate(new Date('2026-11-16T15:00:00Z'))).toBe('2026-11-17');
+  });
+
+  test('gateway memory switch', () => {
+    expect(gatewayMemoryEnabled({})).toBe(true);
+    expect(gatewayMemoryEnabled({ DEXTER_GATEWAY_MEMORY: '0' })).toBe(false);
+  });
+});
 
 describe('turn context (homelab#903)', () => {
   test('EDINET budget from env', () => {

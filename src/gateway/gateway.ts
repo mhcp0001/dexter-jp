@@ -202,7 +202,12 @@ async function handleInbound(cfg: GatewayConfig, inbound: InboundMessage): Promi
     const agentTimer = setTimeout(() => agentController.abort(), agentTimeoutMs);
     let answer: string;
     try {
-      const maxIter = process.env.DEXTER_PUBLIC_GATEWAY === '1' ? 5 : 10;
+      // DEXTER_GATEWAY_MAX_ITERATIONS overrides the public gateway's 5 (homelab#906 H-1: the tools are
+      // narrowed by DEXTER_PUBLIC_GATEWAY, but research needs more steps than 5)
+      const maxIterEnv = Number(process.env.DEXTER_GATEWAY_MAX_ITERATIONS);
+      const maxIter = Number.isInteger(maxIterEnv) && maxIterEnv > 0
+        ? maxIterEnv
+        : process.env.DEXTER_PUBLIC_GATEWAY === '1' ? 5 : 10;
       answer = await runAgentForMessage({
         sessionKey: route.sessionKey,
         query,
@@ -220,7 +225,9 @@ async function handleInbound(cfg: GatewayConfig, inbound: InboundMessage): Promi
       } else if (msg.includes('rate limit') || msg.includes('429') || msg.includes('quota')) {
         answer = '⏳ APIのレート制限に達しました。少し時間を置いてから再度お試しください。';
       } else {
-        answer = `Error: ${msg.slice(0, 200)}`;
+        // The detail goes to the journal only: in a group everyone sees the reply (homelab#906 M-3)
+        console.error(`[gateway] agent error: ${msg}`);
+        answer = '⚠️ エラーが起き、回答できませんでした。時間を空けて再度お試しください。';
       }
     } finally {
       clearTimeout(agentTimer);
