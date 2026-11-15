@@ -4,7 +4,7 @@ import { createMessageQueue, type MessageQueue, type QueuePriority } from '../ut
 import { HEARTBEAT_OK_TOKEN } from './heartbeat/suppression.js';
 import type { AgentEvent } from '../agent/types.js';
 import type { GroupContext } from '../agent/prompts.js';
-import { gatewayMemoryEnabled, runTurn } from '../homelab/turn-context.js';
+import { gatewayMemoryEnabled, redactErrorAnswer, runTurn } from '../homelab/turn-context.js';
 
 type SessionState = {
   history: InMemoryChatHistory;
@@ -155,5 +155,5 @@ async function runAgentForMessageInTurn(req: AgentRunRequest): Promise<string> {
   } else {
     await run();
   }
-  return finalAnswer;
+  return redactErrorAnswer(finalAnswer);
 }

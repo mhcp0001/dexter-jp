@@ -121,3 +121,16 @@ export function chargeEdinetRequest(): void {
 export function gatewayMemoryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !['0', 'false', 'no', 'off'].includes((env.DEXTER_GATEWAY_MEMORY ?? '').trim().toLowerCase());
 }
+
+export const GATEWAY_ERROR_ANSWER = '⚠️ エラーが起き、回答できませんでした。時間を空けて再度お試しください。';
+
+/**
+ * The agent turns an LLM failure into an answer starting with "Error: " and up to 300 characters of
+ * the provider's message. In a group everyone sees it, so the chat gets a fixed sentence and the
+ * detail goes to the journal (homelab#906 N-1, the same rule as #849 L-5).
+ */
+export function redactErrorAnswer(answer: string): string {
+  if (!answer.startsWith('Error: ')) return answer;
+  console.error(`[gateway] agent error answer: ${answer}`);
+  return GATEWAY_ERROR_ANSWER;
+}

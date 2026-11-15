@@ -7,6 +7,8 @@ import {
   chargeEdinetRequest,
   edinetDailyMaxFromEnv,
   gatewayMemoryEnabled,
+  GATEWAY_ERROR_ANSWER,
+  redactErrorAnswer,
   jstDate,
   currentGoSession,
   DEFAULT_EDINET_MAX_CALLS,
@@ -43,6 +45,11 @@ describe('daily EDINET cap and gateway memory (homelab#906)', () => {
     expect(edinetDailyMaxFromEnv({ DEXTER_EDINET_DAILY_MAX: '0' })).toBeNull();
     expect(jstDate(new Date('2026-11-16T14:59:00Z'))).toBe('2026-11-16');
     expect(jstDate(new Date('2026-11-16T15:00:00Z'))).toBe('2026-11-17');
+  });
+
+  test('error answers from the agent are replaced by a fixed sentence', () => {
+    expect(redactErrorAnswer('Error: 500 upstream said acct_123')).toBe(GATEWAY_ERROR_ANSWER);
+    expect(redactErrorAnswer('トヨタの営業利益は…')).toBe('トヨタの営業利益は…');
   });
 
   test('gateway memory switch', () => {

@@ -26,6 +26,7 @@ import type { GroupContext } from '../agent/prompts.js';
 import { appendFileSync } from 'node:fs';
 import { dexterPath } from '../utils/paths.js';
 import { getSetting } from '../utils/config.js';
+import { GATEWAY_ERROR_ANSWER } from '../homelab/turn-context.js';
 
 const LOG_PATH = dexterPath('gateway-debug.log');
 function debugLog(msg: string) {
@@ -227,7 +228,7 @@ async function handleInbound(cfg: GatewayConfig, inbound: InboundMessage): Promi
       } else {
         // The detail goes to the journal only: in a group everyone sees the reply (homelab#906 M-3)
         console.error(`[gateway] agent error: ${msg}`);
-        answer = '⚠️ エラーが起き、回答できませんでした。時間を空けて再度お試しください。';
+        answer = GATEWAY_ERROR_ANSWER;
       }
     } finally {
       clearTimeout(agentTimer);
