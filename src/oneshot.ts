@@ -8,9 +8,11 @@
  *   DEXTER_PROVIDER=claude-agent-sdk DEXTER_MODEL=claude-opus-5-5 bun src/oneshot.ts "<question>"
  *
  * Model: DEXTER_MODEL, else .dexter/settings.json modelId. Provider: DEXTER_PROVIDER, else
- * settings provider. Progress goes to stderr, the answer alone to stdout. No session history,
+ * settings provider. The Claude Agent SDK path reads its credential from .env.claude
+ * (DEXTER_CLAUDE_ENV_FILE). Progress goes to stderr, the answer alone to stdout. No session history,
  * no memory, and no interactive tools (bash, ask_user_question): the channel is not "cli".
  */
+import { config as loadDotenv } from 'dotenv';
 import { Agent } from './agent/agent.js';
 import { AgentSdkAgent } from './agent/agent-sdk-agent.js';
 import type { AgentEvent } from './agent/types.js';
@@ -34,6 +36,9 @@ const model = process.env.DEXTER_MODEL?.trim() || getSetting('modelId', 'go:glm-
 
 async function stream(): Promise<AsyncGenerator<AgentEvent>> {
   if (provider === 'claude-agent-sdk') {
+    // The Claude credential lives in its own file, read only here: the gateway never gets it, and
+    // the agent's file tools cannot read it (.env.* is on upstream's secret-path list). homelab#903
+    loadDotenv({ path: process.env.DEXTER_CLAUDE_ENV_FILE || '.env.claude', quiet: true });
     const budgetRaw = process.env.DEXTER_AGENT_SDK_MAX_BUDGET_USD;
     const agent = await AgentSdkAgent.create({
       model,
