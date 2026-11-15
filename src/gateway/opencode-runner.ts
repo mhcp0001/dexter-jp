@@ -112,12 +112,12 @@ function clip(text: string): string {
   return oneLine.length > MAX_DETAIL_CHARS ? `${oneLine.slice(0, MAX_DETAIL_CHARS)}…` : oneLine;
 }
 
-/**
- * The error kind shown to users: a short identifier such as "provider.quota".
- * Anything else (free text, long or odd strings) becomes "unknown". The full error stays in the journal.
- */
+// Error kinds shown to users as is. Anything else becomes "unknown"; the full error stays in the journal.
+const KNOWN_ERROR_KINDS = new Set(['provider.quota', 'provider.no-route']);
+
+/** The error kind shown to users: a known identifier such as "provider.quota", else "unknown". */
 export function errorKind(type: string): string {
-  return /^[A-Za-z0-9._-]{1,40}$/.test(type) ? type : 'unknown';
+  return KNOWN_ERROR_KINDS.has(type) ? type : 'unknown';
 }
 
 /**

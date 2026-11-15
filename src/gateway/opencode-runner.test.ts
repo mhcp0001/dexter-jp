@@ -77,6 +77,7 @@ describe('opencode runner', () => {
     expect(text).not.toContain('sk-abc');
     expect(describeOpencodeError({ type: 'weird type: with spaces and a secret', message: 'm' })).toContain('種類: unknown');
     expect(errorKind('x'.repeat(41))).toBe('unknown');
+    expect(errorKind('sk-short-key')).toBe('unknown');
     expect(errorKind('provider.no-route')).toBe('provider.no-route');
   });
 
