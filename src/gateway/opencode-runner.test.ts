@@ -6,6 +6,7 @@ import {
   childEnv,
   createTurnLimiter,
   describeOpencodeError,
+  errorKind,
   isOpencodeBackend,
   needsRetry,
   OpencodeBackendError,
@@ -67,6 +68,16 @@ describe('opencode runner', () => {
     expect(describeOpencodeError(result.error!)).toContain('利用上限');
     expect(describeOpencodeError({ type: 'provider.no-route', message: 'Model unavailable' })).toContain('使えなく');
     expect(describeOpencodeError({ type: 'unknown', message: 'x'.repeat(1000) }).length).toBeLessThan(400);
+  });
+
+  test('describeOpencodeError shows only the error kind, not the message (#849 L-5)', () => {
+    const text = describeOpencodeError({ type: 'provider.quota', message: 'account acct_123 key sk-abc over limit' });
+    expect(text).toContain('種類: provider.quota');
+    expect(text).not.toContain('acct_123');
+    expect(text).not.toContain('sk-abc');
+    expect(describeOpencodeError({ type: 'weird type: with spaces and a secret', message: 'm' })).toContain('種類: unknown');
+    expect(errorKind('x'.repeat(41))).toBe('unknown');
+    expect(errorKind('provider.no-route')).toBe('provider.no-route');
   });
 
   test('only the OpenCode Go key reaches the child process', () => {

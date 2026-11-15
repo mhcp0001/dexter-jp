@@ -112,16 +112,28 @@ function clip(text: string): string {
   return oneLine.length > MAX_DETAIL_CHARS ? `${oneLine.slice(0, MAX_DETAIL_CHARS)}…` : oneLine;
 }
 
-/** User-facing explanation for an OpenCode error event. */
+/**
+ * The error kind shown to users: a short identifier such as "provider.quota".
+ * Anything else (free text, long or odd strings) becomes "unknown". The full error stays in the journal.
+ */
+export function errorKind(type: string): string {
+  return /^[A-Za-z0-9._-]{1,40}$/.test(type) ? type : 'unknown';
+}
+
+/**
+ * User-facing explanation for an OpenCode error event (mhcp0001/homelab-infrastructure#849 L-5).
+ * Only the error kind is shown: in a group everyone sees the reply, and the message may carry
+ * provider or account details. The gateway logs the full error (OpencodeBackendError.message) to the journal.
+ */
 export function describeOpencodeError(error: { type: string; message: string }): string {
-  const detail = clip(`${error.type}: ${error.message}`);
+  const kind = errorKind(error.type);
   if (error.type === 'provider.quota') {
-    return `OpenCode の利用上限に達したため、回答できませんでした。時間をおいて試してください（${detail}）`;
+    return `OpenCode の利用上限に達したため、回答できませんでした。時間をおいて試してください（種類: ${kind}）`;
   }
   if (error.type === 'provider.no-route') {
-    return `OpenCode のモデルが使えなくなっています。提供の終了や一覧からの削除が考えられます（${detail}）`;
+    return `OpenCode のモデルが使えなくなっています。提供の終了や一覧からの削除が考えられます（種類: ${kind}）`;
   }
-  return `OpenCode でエラーが起き、回答できませんでした（${detail}）`;
+  return `OpenCode でエラーが起き、回答できませんでした（種類: ${kind}）`;
 }
 
 export function childEnv(dir: string): NodeJS.ProcessEnv {
@@ -352,7 +364,7 @@ async function runAttempt(req: OpencodeRunRequest, input: string, sessionId?: st
     output = await runProcess(bin, args, input, dir, timeoutMs, req.signal);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    throw new OpencodeBackendError(`failed to start ${bin}: ${message}`, `OpenCode を起動できませんでした（${clip(message)}）`);
+    throw new OpencodeBackendError(`failed to start ${bin}: ${message}`, 'OpenCode を起動できませんでした（詳細はログ）');
   }
 
   const result = parseOpencodeEvents(output.stdout);
@@ -372,7 +384,7 @@ async function runAttempt(req: OpencodeRunRequest, input: string, sessionId?: st
   }
   if (output.code !== 0) {
     const detail = clip(output.stderr || output.stdout || `exit ${output.code}`);
-    throw new OpencodeBackendError(`opencode exited with ${output.code}: ${detail}`, `OpenCode が異常終了しました（${detail}）`);
+    throw new OpencodeBackendError(`opencode exited with ${output.code}: ${detail}`, `OpenCode が異常終了しました（終了コード ${output.code}、詳細はログ）`);
   }
   return result;
 }
