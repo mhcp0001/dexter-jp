@@ -141,6 +141,7 @@ EDINET DB の鍵は[こちら](https://edinetdb.jp/developers?utm_source=github&
 | Ollama（既定では手元、設定すれば別のホスト） | 会話の内容・埋め込みの対象テキスト | OLLAMA_BASE_URL / OLLAMA_CLOUD_API_KEY | —（手元で動かす場合は外に出ません） | 無効 |
 | OpenRouter | 会話の内容（OpenRouter 経由のモデルを選んだ場合） | OPENROUTER_API_KEY | あなたの鍵 | 無効 |
 | Moonshot | 会話の内容（Kimi を選んだ場合） | MOONSHOT_API_KEY | あなたの鍵 | 無効 |
+| OpenCode Go | 会話の内容（go: で始まるモデルを選んだ場合。homelab#903） | OPENCODE_GO_API_KEY | あなたの OpenCode Go の契約 | 無効 |
 | DeepSeek | 会話の内容（DeepSeek のモデルを選んだ場合） | DEEPSEEK_API_KEY | あなたの鍵 | 無効 |
 | メッセージングのゲートウェイ（Slack / Discord / WhatsApp / LINE） | エージェントの応答（ゲートウェイを起動した場合のみ） | それぞれのゲートウェイを起動したとき | あなたのトークン | 無効 |
 

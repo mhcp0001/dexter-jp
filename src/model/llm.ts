@@ -14,6 +14,7 @@ import type { TokenUsage } from '@/agent/types';
 import { logger } from '@/utils';
 import { classifyError, isNonRetryableError } from '@/utils/errors';
 import { resolveProvider, getProviderById } from '@/providers';
+import { currentGoSession } from '@/homelab/turn-context';
 
 export const DEFAULT_PROVIDER = 'openai';
 export const DEFAULT_MODEL = 'gpt-5.6-sol';
@@ -165,6 +166,23 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
       }),
     });
   },
+  // OpenCode Go asks clients to send their own User-Agent and a stable x-opencode-session
+  // header per conversation (mhcp0001/homelab-infrastructure#903). Set both on every request.
+  'opencode-go': (name, opts) =>
+    new ChatOpenAI({
+      model: name.replace(/^go:/, ''),
+      ...opts,
+      apiKey: getApiKey('OPENCODE_GO_API_KEY'),
+      configuration: {
+        baseURL: process.env.OPENCODE_GO_BASE_URL || 'https://opencode.ai/inference/go/openai/v1',
+        fetch: (input: RequestInfo | URL, init?: RequestInit) => {
+          const headers = new Headers(init?.headers);
+          headers.set('user-agent', process.env.OPENCODE_GO_USER_AGENT || 'dexter-jp-homelab/1.0');
+          headers.set('x-opencode-session', currentGoSession());
+          return fetch(input, { ...init, headers });
+        },
+      },
+    }),
   ollama: (name, opts) =>
     new ChatOllama({
       model: name.replace(/^ollama:/, ''),

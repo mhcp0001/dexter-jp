@@ -4,6 +4,7 @@ import { createMessageQueue, type MessageQueue, type QueuePriority } from '../ut
 import { HEARTBEAT_OK_TOKEN } from './heartbeat/suppression.js';
 import type { AgentEvent } from '../agent/types.js';
 import type { GroupContext } from '../agent/prompts.js';
+import { runTurn } from '../homelab/turn-context.js';
 
 type SessionState = {
   history: InMemoryChatHistory;
@@ -71,7 +72,15 @@ export type AgentRunRequest = {
   groupContext?: GroupContext;
 };
 
-export async function runAgentForMessage(req: AgentRunRequest): Promise<string> {
+/**
+ * Every gateway, cron and heartbeat turn runs inside its own turn context: a stable OpenCode Go
+ * session header per conversation and a fresh EDINET DB budget (homelab#903).
+ */
+export function runAgentForMessage(req: AgentRunRequest): Promise<string> {
+  return runTurn(req.sessionKey, () => runAgentForMessageInTurn(req));
+}
+
+async function runAgentForMessageInTurn(req: AgentRunRequest): Promise<string> {
   const isolated = req.isolatedSession ?? false;
   const session = isolated ? null : getSession(req.sessionKey, req.model);
   let finalAnswer = '';

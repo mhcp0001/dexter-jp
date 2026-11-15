@@ -191,7 +191,7 @@ describe('activeDestinations — 台帳の全 id に判定がある', () => {
       EDINETDB_API_KEY: 'x', TYPESAFE_API_KEY: 'x', OPENAI_API_KEY: 'x',
       LANGSMITH_TRACING: '1', JQUANTS_API_KEY: 'x', TAVILY_API_KEY: 'x',
       X_BEARER_TOKEN: 'x', OLLAMA_BASE_URL: 'x', OPENROUTER_API_KEY: 'x',
-      MOONSHOT_API_KEY: 'x', DEEPSEEK_API_KEY: 'x',
+      MOONSHOT_API_KEY: 'x', DEEPSEEK_API_KEY: 'x', OPENCODE_GO_API_KEY: 'x',
     } as NodeJS.ProcessEnv;
     const active = activeDestinations(allEnv).map(d => d.id);
     const expected = EGRESS_DESTINATIONS
