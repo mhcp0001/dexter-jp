@@ -17,7 +17,13 @@ if (isOpencodeBackend()) {
     console.log(await runOpencodeForMessage({ sessionKey: "oneshot", query, isolatedSession: true }));
     process.exit(0);
   } catch (err) {
-    console.error(err instanceof OpencodeBackendError ? err.userMessage : String(err));
+    if (err instanceof OpencodeBackendError) {
+      // oneshot runs for the owner over SSH, so the full error goes to stderr as well.
+      console.error(err.userMessage);
+      console.error(`[opencode] ${err.message}`);
+    } else {
+      console.error(String(err));
+    }
     process.exit(1);
   }
 }
