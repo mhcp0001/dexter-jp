@@ -160,6 +160,16 @@ export const EGRESS_DESTINATIONS: readonly EgressDestination[] = [
     onByDefault: false,
   },
   {
+    id: 'opencode-go',
+    label: 'OpenCode Go',
+    hosts: ['opencode.ai'],
+    category: 'llm',
+    whatIsSent: '会話の内容（go: で始まるモデルを選んだ場合。homelab#903）',
+    enabledWhen: 'OPENCODE_GO_API_KEY',
+    credential: 'あなたの OpenCode Go の契約',
+    onByDefault: false,
+  },
+  {
     id: 'deepseek',
     label: 'DeepSeek',
     hosts: ['api.deepseek.com'],
@@ -221,6 +231,7 @@ export function activeDestinations(env: NodeJS.ProcessEnv = process.env): Egress
       case 'ollama': return Boolean(env.OLLAMA_BASE_URL || env.OLLAMA_CLOUD_API_KEY);
       case 'openrouter': return Boolean(env.OPENROUTER_API_KEY);
       case 'moonshot': return Boolean(env.MOONSHOT_API_KEY);
+      case 'opencode-go': return Boolean(env.OPENCODE_GO_API_KEY);
       case 'deepseek': return Boolean(env.DEEPSEEK_API_KEY);
       case 'messaging-gateways': return false; // ゲートウェイの起動時にだけ出す
       default: return false;

@@ -89,6 +89,16 @@ export const PROVIDERS: ProviderDef[] = [
     contextWindow: 128_000,
   },
   {
+    // OpenCode Go through its OpenAI-compatible endpoint (mhcp0001/homelab-infrastructure#903).
+    // Explicit "go:" prefix so names such as kimi-/grok-/gemini- reach Go instead of their vendors.
+    id: 'opencode-go',
+    displayName: 'OpenCode Go',
+    modelPrefix: 'go:',
+    apiKeyEnvVar: 'OPENCODE_GO_API_KEY',
+    fastModel: 'go:glm-5.3-flash',
+    contextWindow: 200_000,
+  },
+  {
     // Claude Agent SDK mode: the loop is delegated to @anthropic-ai/claude-agent-sdk,
     // which resolves its own credentials (Claude Code login / OAuth / API key / etc.).
     // No apiKeyEnvVar — like Ollama, this is a special (non-API-key) provider whose

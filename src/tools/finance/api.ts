@@ -1,5 +1,6 @@
 import { readCache, writeCache, describeRequest } from '../../utils/cache.js';
 import { logger } from '../../utils/logger.js';
+import { chargeEdinetRequest } from '../../homelab/turn-context.js';
 
 const BASE_URL = 'https://edinetdb.jp/v1';
 
@@ -77,6 +78,13 @@ async function executeRequest(
   label: string,
   init: RequestInit,
 ): Promise<Record<string, unknown>> {
+  // One request against this turn's EDINET DB budget (homelab#903; cache hits never get here).
+  try {
+    chargeEdinetRequest();
+  } catch (err) {
+    logger.warn(`[EDINET DB API] ${err instanceof Error ? err.message : String(err)}: ${label}`);
+    throw err;
+  }
   const apiKey = getApiKey();
 
   if (!apiKey) {
