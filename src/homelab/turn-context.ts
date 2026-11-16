@@ -35,9 +35,21 @@ export function edinetBudgetFromEnv(env: NodeJS.ProcessEnv = process.env): numbe
   return n === 0 ? null : n;
 }
 
+// Mixed into the session id so it cannot be matched from a known Discord channel id (homelab#906 L-2).
+// Stable per host: /etc/machine-id, else a random value for this process.
+const sessionSalt = (() => {
+  try {
+    const id = readFileSync('/etc/machine-id', 'utf8').trim();
+    if (id) return id;
+  } catch {
+    // not Linux, or unreadable
+  }
+  return randomUUID();
+})();
+
 /** A stable, non-identifying session id derived from a gateway session key. */
 export function goSessionFor(sessionKey: string): string {
-  return `dexter_${createHash('sha256').update(sessionKey).digest('hex').slice(0, 24)}`;
+  return `dexter_${createHash('sha256').update(sessionSalt).update('\0').update(sessionKey).digest('hex').slice(0, 24)}`;
 }
 
 /** Run one turn with its own Go session header and a fresh EDINET budget. */
