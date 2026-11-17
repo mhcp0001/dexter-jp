@@ -145,6 +145,9 @@ async function run(): Promise<void> {
   }
 
   const shutdown = async () => {
+    // Stopping the channels can hang (Discord), and systemd then waits 90 s before SIGKILL.
+    // Exit after 5 s regardless (homelab#908).
+    setTimeout(() => process.exit(0), 5000).unref();
     await server.stop();
     process.exit(0);
   };

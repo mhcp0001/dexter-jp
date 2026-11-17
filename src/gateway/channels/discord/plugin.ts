@@ -2,6 +2,7 @@ import type { ChannelPlugin, ChannelStartContext } from '../types.js';
 import type { InboundMessage } from '../../types.js';
 import type { GatewayConfig } from '../../config.js';
 import { logger } from '../../../utils/logger.js';
+import { isDiscordSenderAllowed } from '../../../homelab/discord-allow.js';
 
 type DiscordAccountConfig = {
   enabled: boolean;
@@ -86,6 +87,12 @@ export function createDiscordPlugin(params: DiscordPluginParams): ChannelPlugin<
 
           // In servers, only respond to @mentions; in DMs, always respond
           if (!isDm && !isMentioned) return;
+
+          // Only the allowed senders (homelab#850). Others are ignored without a reply.
+          if (!isDiscordSenderAllowed(message.author.id)) {
+            logger.info(`[Discord] ignored a message from a sender not on DISCORD_ALLOWED_USER_IDS (${message.author.id})`);
+            return;
+          }
 
           // Strip bot mention and role mentions from message text
           let body = message.content;

@@ -91,6 +91,8 @@ describe('turn context (homelab#903)', () => {
   test('Go session: stable per session key, not the key itself, separate per turn', async () => {
     expect(goSessionFor('discord:123')).toBe(goSessionFor('discord:123'));
     expect(goSessionFor('discord:123')).not.toContain('123');
+    // salted: not the plain sha256 of the key
+    expect(goSessionFor('discord:123')).not.toBe(`dexter_${require('node:crypto').createHash('sha256').update('discord:123').digest('hex').slice(0, 24)}`);
     const inA = await runTurn('discord:123', async () => currentGoSession());
     expect(inA).toBe(goSessionFor('discord:123'));
     const anon1 = await runTurn(null, async () => currentGoSession());
