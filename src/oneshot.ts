@@ -56,8 +56,20 @@ const agentQuery = evidenceMode ? query + EVIDENCE_INSTRUCTION : query;
 const writeStdout = process.stdout.write.bind(process.stdout);
 const capture = evidenceMode ? captureOutput((args) => args.map((a) => (typeof a === 'string' ? a : inspect(a))).join(' ')) : null;
 
+// Resolves on the write callback or on a stream error (EPIPE when the SSH peer is gone).
 async function emit(text: string): Promise<void> {
-  await new Promise<void>((resolve) => writeStdout(`${text}\n`, () => resolve()));
+  await new Promise<void>((resolve) => {
+    process.stdout.once('error', () => resolve());
+    writeStdout(`${text}\n`, () => resolve());
+  });
+}
+
+const EXIT_FALLBACK_MS = 5000;
+
+/** Mark the run finished, with a last-resort exit in case the final write never completes. */
+function finish(code: number): void {
+  finished = true;
+  setTimeout(() => process.exit(code), EXIT_FALLBACK_MS).unref();
 }
 
 // Set by the first of success, failure or signal; whatever comes later writes nothing. The capture
@@ -68,7 +80,7 @@ let finished = false;
 /** Report a failure: a JSON document in evidence mode, a stderr line otherwise. */
 async function fail(message: string): Promise<void> {
   if (finished) return;
-  finished = true;
+  finish(1);
   if (capture) {
     await emit(JSON.stringify({ schema: EVIDENCE_SCHEMA, error: message, log: capture.lines() }));
   } else {
@@ -150,7 +162,7 @@ if (finished) {
   // a signal arrived while the agent finished; its JSON is being written
   await new Promise<never>(() => {});
 }
-finished = true;
+finish(0);
 if (capture) {
   const bundle = buildEvidence({
     question: query,
