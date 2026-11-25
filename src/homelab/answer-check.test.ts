@@ -122,3 +122,44 @@ describe('inputs on the same line', () => {
     expect(checkAnswer('元データ: 3,766,216 ÷ 50,684,952', ['{"operating_income":3766216000000,"revenue":50684952000000}']).unverified).toEqual([]);
   });
 });
+
+// Drafts from the 2026-11-25 evidence runs (mhcp0001/homelab-infrastructure#956): every figure was
+// right, and the check flagged 7 of them because it knew no products, quotients or ratio differences.
+describe('answer check: products, quotients and ratio differences (#956)', () => {
+  const PRICE = JSON.stringify({ data: { code: '65010', date: '2026-09-02', close: 5335 } });
+  const SHARES = JSON.stringify({ shares_issued_fiscal_year_end: 4535560985 });
+  const FX = '1 USD = 159.409 JPY\n\n2026年11月18日 3:32 UTC';
+  const MARKET_CAP = [
+    '- 終値 5,335円（2026-09-02付）',
+    '- 159.409円（2026-11-18 3:32 UTC時点）',
+    '- 発行済株式数: 4,535,560,985株',
+    '- 5,335円/株 × 4,535,560,985株 = 24,197,217,854,975円 ≈ 約24兆1,972億円',
+    '- 24,197,217,854,975円 ÷ 159.409円/ドル ≈ 151,793,000,000ドル ≈ 約1,518億ドル（約1,517.9億ドル）',
+  ].join('\n');
+
+  test('accepts price × shares and yen ÷ rate, and their rounded restatements', () => {
+    expect(checkAnswer(MARKET_CAP, [PRICE, SHARES, FX]).unverified).toEqual([]);
+  });
+
+  test('still flags a product that the inputs on its line do not give', () => {
+    const answer = '- 5,335円/株 × 4,535,560,985株 = 25,000,000,000,000円';
+    expect(checkAnswer(answer, [PRICE, SHARES]).unverified).toEqual(['25,000,000,000,000円']);
+  });
+
+  test('still flags a product whose inputs are on another line', () => {
+    const answer = ['- 終値 5,335円、株数 4,535,560,985株', '- 時価総額 24,197,217,854,975円'].join('\n');
+    expect(checkAnswer(answer, [PRICE, SHARES]).unverified).toEqual(['24,197,217,854,975円']);
+  });
+
+  const ROE = JSON.stringify({ hitachi: { roe_official: 0.129 }, fujitsu: { roe_official: 0.239 } });
+
+  test('accepts the difference of two decimal ratios, as a decimal and in points', () => {
+    const answer = '差 = 0.239 − 0.129 = 0.110 → **11.0ポイント**';
+    expect(checkAnswer(answer, [ROE]).unverified).toEqual([]);
+  });
+
+  test('still flags a wrong point difference of two decimal ratios', () => {
+    const answer = '差 = 0.239 − 0.129 → 12.0ポイント';
+    expect(checkAnswer(answer, [ROE]).unverified).toEqual(['12.0ポイント']);
+  });
+});
