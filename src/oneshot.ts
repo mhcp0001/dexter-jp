@@ -60,15 +60,27 @@ async function emit(text: string): Promise<void> {
   await new Promise<void>((resolve) => writeStdout(`${text}\n`, () => resolve()));
 }
 
+// Set by the first of success, failure or signal; whatever comes later writes nothing. The capture
+// is never undone in evidence mode (emit writes through the original stdout), so late output from the
+// agent or a library still goes into the buffer instead of onto stdout / stderr.
+let finished = false;
+
 /** Report a failure: a JSON document in evidence mode, a stderr line otherwise. */
-async function fail(message: string): Promise<never> {
+async function fail(message: string): Promise<void> {
+  if (finished) return;
+  finished = true;
   if (capture) {
-    capture.restore();
     await emit(JSON.stringify({ schema: EVIDENCE_SCHEMA, error: message, log: capture.lines() }));
   } else {
     console.error(`[oneshot] ${message}`);
   }
   process.exit(1);
+}
+
+/** Stop the script here after fail(): fail() exits, or another ending is already being written. */
+async function failAndStop(message: string): Promise<never> {
+  await fail(message);
+  return new Promise<never>(() => {});
 }
 
 const provider = process.env.DEXTER_PROVIDER?.trim() || getSetting('provider', 'opencode-go');
@@ -100,7 +112,10 @@ async function stream(): Promise<AsyncGenerator<AgentEvent>> {
 
 // `timeout` (and a closed SSH session) stop the run with a signal: still leave one JSON document.
 if (capture) {
-  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(signal, () => void fail(`terminated by ${signal}`));
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.on(signal, () => void fail(`terminated by ${signal}`));
+  // Without these, Bun prints the stack on stderr and exits with no JSON.
+  process.on('uncaughtException', (err) => void fail(`uncaught: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500)));
+  process.on('unhandledRejection', (err) => void fail(`unhandled rejection: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500)));
 }
 
 const started = Date.now();
@@ -119,20 +134,24 @@ try {
     }
   });
 } catch (err) {
-  await fail(`agent error: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500));
+  await failAndStop(`agent error: ${err instanceof Error ? err.message : String(err)}`.slice(0, 500));
 }
 
 console.error(`[oneshot] provider=${provider} model=${model} ${Date.now() - started}ms tools=${tools.join(',') || '-'}`);
 if (answer === null || answer.trim() === '') {
-  await fail('no answer');
+  await failAndStop('no answer');
 }
 // The agents put a failed model call into the answer ("Error: …", the SDK's "API Error: …").
 // Report it as a failure so a caller comparing models does not take it for an answer.
 if (/^(API )?Error: /.test(answer!.trim())) {
-  await fail(`failed: ${answer!.trim().slice(0, 500)}`);
+  await failAndStop(`failed: ${answer!.trim().slice(0, 500)}`);
 }
+if (finished) {
+  // a signal arrived while the agent finished; its JSON is being written
+  await new Promise<never>(() => {});
+}
+finished = true;
 if (capture) {
-  capture.restore();
   const bundle = buildEvidence({
     question: query,
     provider,

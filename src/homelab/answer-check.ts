@@ -148,13 +148,17 @@ function hasNear(values: number[], target: number, tol: number): boolean {
  *   amounts and plain figures: a − b, a + b of the same kind (difference of two prices, sum of two
  *   companies), and a × b, a / b of any two amounts or plain figures (price × shares, yen ÷ rate, #956)
  * A product or quotient is usually rounded far above its last digit (151,793,000,000 for
- * 151,793,298,088), so it is matched within 0.1 % of its size.
+ * 151,793,298,088), so it is matched within 0.1 % of its size, or half its last digit. Only for a
+ * result of 100 or more: any two figures on a line divide into some small number (PER 13.4, PBR 1.1),
+ * so a small product or quotient stays unverified. A product rounded further than 0.1 %
+ * (3兆8,182億 written as 3兆8,000億) is flagged too; the reader checks it against the raw data.
  */
 function derivable(c: Claim, inputs: Claim[]): boolean {
   const target = Math.abs(c.value);
   const rounded = c.kind === 'percent' || c.kind === 'points' || c.kind === 'times' || isDecimalRatio(c);
   const rounding = rounded ? Math.max(c.tol, target * 0.005) : c.tol * 1.5;
-  const productRounding = Math.max(rounding, target * 0.001);
+  const productRounding = Math.max(c.tol * 0.5 + Number.EPSILON * target, target * 0.001);
+  const productAllowed = target >= 100;
   for (const a of inputs) {
     for (const b of inputs) {
       if (a === b) continue;
@@ -171,7 +175,7 @@ function derivable(c: Claim, inputs: Claim[]): boolean {
         if (bothRatios) near.push([x - y, rounding], [x + y, rounding]);
       } else if (c.kind === 'amount' || c.kind === 'plain') {
         if (a.kind === c.kind && b.kind === c.kind) near.push([x - y, rounding], [x + y, rounding]);
-        if (isFigure(a) && isFigure(b)) {
+        if (productAllowed && isFigure(a) && isFigure(b)) {
           near.push([x * y, productRounding]);
           if (y !== 0) near.push([x / y, productRounding]);
         }
@@ -185,6 +189,14 @@ function derivable(c: Claim, inputs: Claim[]): boolean {
 /** An amount or a plain figure: an input of a product or a quotient. */
 function isFigure(c: Claim): boolean {
   return c.kind === 'amount' || c.kind === 'plain';
+}
+
+/**
+ * Same kind: as before, within the coarser of the two (a summary line restating 7.4% for 7.43%).
+ * Across plain and 兆/億: within half the restating figure's last digit.
+ */
+function repeatTolerance(v: Claim, c: Claim): number {
+  return v.kind === c.kind ? Math.max(v.tol, c.tol) : c.tol * 0.5;
 }
 
 function sameKindForRepeat(a: Claim, b: Claim): boolean {
@@ -225,7 +237,8 @@ export function checkAnswer(answer: string, sources: string[]): CheckResult {
     // a figure already checked elsewhere in the answer may be repeated (a summary line restating 7.4%)
     for (const c of claims) {
       // an amount may restate a plain figure in 兆 / 億 (24,197,217,854,975円 ≈ 24兆1,972億円)
-      if (!verified.has(c) && [...verified].some((v) => sameKindForRepeat(v, c) && Math.abs(Math.abs(v.value) - Math.abs(c.value)) <= Math.max(v.tol, c.tol))) verified.add(c);
+      // within the restating figure's own precision: a coarse 4兆円 must not vouch for anything within ±1兆
+      if (!verified.has(c) && [...verified].some((v) => sameKindForRepeat(v, c) && Math.abs(Math.abs(v.value) - Math.abs(c.value)) <= repeatTolerance(v, c))) verified.add(c);
     }
   }
   const unverified = [...new Set(claims.filter((c) => !verified.has(c)).map((c) => c.raw))];

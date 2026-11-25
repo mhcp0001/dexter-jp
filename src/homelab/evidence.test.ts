@@ -95,6 +95,25 @@ describe('captureOutput (#956)', () => {
     expect(lines.at(-1)).toHaveLength(CAPTURE_MAX_LINE_CHARS);
   });
 
+  test('captures the console methods Bun writes straight to the streams', () => {
+    const cap = captureOutput((args) => args.map(String).join(' '));
+    try {
+      console.dir({ a: 1 });
+      console.table([1]);
+      console.count('n');
+      console.trace('t');
+      console.timeEnd('none');
+      console.assert(true, 'not printed');
+      console.assert(false, 'printed');
+    } finally {
+      cap.restore();
+    }
+    const lines = cap.lines();
+    expect(lines).toContain('Assertion failed: printed');
+    expect(lines.some((l) => l.includes('not printed'))).toBe(false);
+    expect(lines.length).toBe(6);
+  });
+
   test('the bundle carries the log', () => {
     const b = buildEvidence({ question: 'q', provider: 'p', model: 'm', elapsedMs: 1, draft: 'd', toolEnds: [], toolErrors: [], maxResultChars: 10, log: ['warn'] });
     expect(b.log).toEqual(['warn']);

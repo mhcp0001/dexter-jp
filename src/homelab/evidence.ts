@@ -114,11 +114,24 @@ export function captureOutput(format: (args: unknown[]) => string): Captured {
       if (buffer.length > CAPTURE_MAX_LINES) buffer.shift();
     }
   };
-  const methods = ['log', 'info', 'warn', 'error', 'debug'] as const;
+  // Bun writes every one of these straight to stdout or stderr (dir, table, count, trace, timeEnd, assert ...)
+  const methods = [
+    'log', 'info', 'warn', 'error', 'debug', 'trace', 'dir', 'dirxml', 'table',
+    'count', 'countReset', 'time', 'timeEnd', 'timeLog', 'group', 'groupCollapsed', 'groupEnd', 'assert',
+  ] as const;
   const savedConsole = methods.map((m) => console[m]);
   const savedOut = process.stdout.write;
   const savedErr = process.stderr.write;
-  for (const m of methods) console[m] = (...args: unknown[]) => push(format(args));
+  for (const m of methods) {
+    (console as unknown as Record<string, (...args: unknown[]) => void>)[m] = (...args: unknown[]) => {
+      if (m === 'assert') {
+        if (args[0]) return;
+        push(`Assertion failed: ${format(args.slice(1))}`);
+        return;
+      }
+      if (args.length > 0) push(format(args));
+    };
+  }
   const writer = ((chunk: unknown, ...rest: unknown[]) => {
     push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf8'));
     const cb = rest.find((r) => typeof r === 'function') as (() => void) | undefined;
@@ -131,7 +144,7 @@ export function captureOutput(format: (args: unknown[]) => string): Captured {
     lines: () => [...buffer],
     restore: () => {
       methods.forEach((m, i) => {
-        console[m] = savedConsole[i];
+        (console as unknown as Record<string, unknown>)[m] = savedConsole[i];
       });
       process.stdout.write = savedOut;
       process.stderr.write = savedErr;
