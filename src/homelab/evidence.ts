@@ -35,6 +35,8 @@ export type EvidenceBundle = {
   draft: string;
   tool_calls: EvidenceToolCall[];
   tool_errors: EvidenceToolError[];
+  /** What the agent and the libraries printed during the run (stderr and stray stdout), last lines only. */
+  log: string[];
   check: {
     /** Figures in the draft that appear in no tool output and are not computed from figures that do. */
     unverified_numbers: string[];
@@ -59,6 +61,7 @@ export function buildEvidence(input: {
   toolEnds: RecordedToolEnd[];
   toolErrors: EvidenceToolError[];
   maxResultChars: number;
+  log?: string[];
 }): EvidenceBundle {
   const check = checkAnswer(
     input.draft,
@@ -83,10 +86,68 @@ export function buildEvidence(input: {
       };
     }),
     tool_errors: input.toolErrors,
+    log: input.log ?? [],
     check: {
       unverified_numbers: check.unverified,
       odd_scripts: check.oddScripts,
       unknown_words: check.unknownWords,
+    },
+  };
+}
+
+export const CAPTURE_MAX_LINES = 100;
+export const CAPTURE_MAX_LINE_CHARS = 500;
+
+type Captured = { lines(): string[]; restore(): void };
+
+/**
+ * Route console.* and process.stdout / process.stderr writes into a buffer, so that in evidence mode
+ * the bundle is the only output (#956). Keeps the last CAPTURE_MAX_LINES lines, each cut to
+ * CAPTURE_MAX_LINE_CHARS. restore() puts the originals back.
+ */
+export function captureOutput(format: (args: unknown[]) => string): Captured {
+  const buffer: string[] = [];
+  const push = (text: string) => {
+    for (const line of text.split('\n')) {
+      if (line.trim() === '') continue;
+      buffer.push(line.slice(0, CAPTURE_MAX_LINE_CHARS));
+      if (buffer.length > CAPTURE_MAX_LINES) buffer.shift();
+    }
+  };
+  // Bun writes every one of these straight to stdout or stderr (dir, table, count, trace, timeEnd, assert ...)
+  const methods = [
+    'log', 'info', 'warn', 'error', 'debug', 'trace', 'dir', 'dirxml', 'table',
+    'count', 'countReset', 'time', 'timeEnd', 'timeLog', 'group', 'groupCollapsed', 'groupEnd', 'assert',
+  ] as const;
+  const savedConsole = methods.map((m) => console[m]);
+  const savedOut = process.stdout.write;
+  const savedErr = process.stderr.write;
+  for (const m of methods) {
+    (console as unknown as Record<string, (...args: unknown[]) => void>)[m] = (...args: unknown[]) => {
+      if (m === 'assert') {
+        if (args[0]) return;
+        push(`Assertion failed: ${format(args.slice(1))}`);
+        return;
+      }
+      if (args.length > 0) push(format(args));
+    };
+  }
+  const writer = ((chunk: unknown, ...rest: unknown[]) => {
+    push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf8'));
+    const cb = rest.find((r) => typeof r === 'function') as (() => void) | undefined;
+    cb?.();
+    return true;
+  }) as typeof process.stdout.write;
+  process.stdout.write = writer;
+  process.stderr.write = writer;
+  return {
+    lines: () => [...buffer],
+    restore: () => {
+      methods.forEach((m, i) => {
+        (console as unknown as Record<string, unknown>)[m] = savedConsole[i];
+      });
+      process.stdout.write = savedOut;
+      process.stderr.write = savedErr;
     },
   };
 }

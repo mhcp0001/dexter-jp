@@ -122,3 +122,69 @@ describe('inputs on the same line', () => {
     expect(checkAnswer('元データ: 3,766,216 ÷ 50,684,952', ['{"operating_income":3766216000000,"revenue":50684952000000}']).unverified).toEqual([]);
   });
 });
+
+// Drafts from the 2026-11-25 evidence runs (mhcp0001/homelab-infrastructure#956): every figure was
+// right, and the check flagged 7 of them because it knew no products, quotients or ratio differences.
+describe('answer check: products, quotients and ratio differences (#956)', () => {
+  const PRICE = JSON.stringify({ data: { code: '65010', date: '2026-09-02', close: 5335 } });
+  const SHARES = JSON.stringify({ shares_issued_fiscal_year_end: 4535560985 });
+  const FX = '1 USD = 159.409 JPY\n\n2026年11月18日 3:32 UTC';
+  const MARKET_CAP = [
+    '- 終値 5,335円（2026-09-02付）',
+    '- 159.409円（2026-11-18 3:32 UTC時点）',
+    '- 発行済株式数: 4,535,560,985株',
+    '- 5,335円/株 × 4,535,560,985株 = 24,197,217,854,975円 ≈ 約24兆1,972億円',
+    '- 24,197,217,854,975円 ÷ 159.409円/ドル ≈ 151,793,000,000ドル ≈ 約1,518億ドル（約1,517.9億ドル）',
+  ].join('\n');
+
+  test('accepts price × shares and yen ÷ rate, and their rounded restatements', () => {
+    expect(checkAnswer(MARKET_CAP, [PRICE, SHARES, FX]).unverified).toEqual([]);
+  });
+
+  test('still flags a product that the inputs on its line do not give', () => {
+    const answer = '- 5,335円/株 × 4,535,560,985株 = 25,000,000,000,000円';
+    expect(checkAnswer(answer, [PRICE, SHARES]).unverified).toEqual(['25,000,000,000,000円']);
+  });
+
+  test('still flags a product whose inputs are on another line', () => {
+    const answer = ['- 終値 5,335円、株数 4,535,560,985株', '- 時価総額 24,197,217,854,975円'].join('\n');
+    expect(checkAnswer(answer, [PRICE, SHARES]).unverified).toEqual(['24,197,217,854,975円']);
+  });
+
+  const ROE = JSON.stringify({ hitachi: { roe_official: 0.129 }, fujitsu: { roe_official: 0.239 } });
+
+  test('accepts the difference of two decimal ratios, as a decimal and in points', () => {
+    const answer = '差 = 0.239 − 0.129 = 0.110 → **11.0ポイント**';
+    expect(checkAnswer(answer, [ROE]).unverified).toEqual([]);
+  });
+
+  test('still flags a wrong point difference of two decimal ratios', () => {
+    const answer = '差 = 0.239 − 0.129 → 12.0ポイント';
+    expect(checkAnswer(answer, [ROE]).unverified).toEqual(['12.0ポイント']);
+  });
+});
+
+// Review of dexter-jp#12: lines the first version of the product / quotient rule let through
+describe('answer check: products and quotients do not vouch for small or coarse figures (#956)', () => {
+  const SRC = JSON.stringify({ revenue: 3766216, prior_revenue: 3412000, close: 2512, eps: 187.3, shares: 1520000000, operating_income_jp: '4兆円' });
+
+  test('a ratio of two figures on the line does not vouch for a small invented figure', () => {
+    expect(checkAnswer('売上 3,766,216百万円（前期 3,412,000百万円）、PBR 1.2', [SRC]).unverified).toEqual(['1.2']);
+  });
+
+  test('a quotient is matched within half its last digit, not one and a half', () => {
+    // 2512 / 187.3 = 13.41
+    expect(checkAnswer('株価 2,512円 ÷ EPS 187.3円 = PER 13.5', [SRC]).unverified).toEqual(['13.5']);
+    expect(checkAnswer('株価 2,512円、EPS 187.3円、配当 13.4円', [SRC]).unverified).toEqual(['13.4円']);
+  });
+
+  test('a coarse restatement does not vouch for a precise plain figure', () => {
+    expect(checkAnswer('営業利益は4兆円（4,300,000,000,000円）', [SRC]).unverified).toEqual(['4,300,000,000,000円']);
+  });
+
+  test('a product rounded further than 0.1 % stays unverified (the reader checks it)', () => {
+    // 2,512 × 1,520,000,000 = 3兆8,182億
+    expect(checkAnswer('2,512円 × 1,520,000,000株 = 3兆8,182億円', [SRC]).unverified).toEqual([]);
+    expect(checkAnswer('2,512円 × 1,520,000,000株 = 3兆8,000億円', [SRC]).unverified).toEqual(['3兆8,000億円']);
+  });
+});

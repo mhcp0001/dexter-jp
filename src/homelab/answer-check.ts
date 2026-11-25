@@ -143,28 +143,64 @@ function hasNear(values: number[], target: number, tol: number): boolean {
  * Whether c can be computed from two other figures in the answer. Only the computations an analyst
  * writes are allowed, by kind, so that an invented number rarely matches by chance:
  *   %   : a / b × 100, growth (a / b − 1) × 100        倍 : a / b
- *   pt  : difference of two % figures                   0.0743 (a plain decimal below 1) : a / b
- *   amounts and plain figures: a − b, a + b of the same kind (difference of two prices, sum of two companies)
+ *   pt  : difference of two % figures, or of two decimal ratios × 100 (0.239 − 0.129 → 11.0pt)
+ *   0.0743 (a plain decimal below 1) : a / b, or the difference / sum of two decimal ratios
+ *   amounts and plain figures: a − b, a + b of the same kind (difference of two prices, sum of two
+ *   companies), and a × b, a / b of any two amounts or plain figures (price × shares, yen ÷ rate, #956)
+ * A product or quotient is usually rounded far above its last digit (151,793,000,000 for
+ * 151,793,298,088), so it is matched within 0.1 % of its size, or half its last digit. Only for a
+ * result of 100 or more: any two figures on a line divide into some small number (PER 13.4, PBR 1.1),
+ * so a small product or quotient stays unverified. A product rounded further than 0.1 %
+ * (3兆8,182億 written as 3兆8,000億) is flagged too; the reader checks it against the raw data.
  */
 function derivable(c: Claim, inputs: Claim[]): boolean {
   const target = Math.abs(c.value);
   const rounded = c.kind === 'percent' || c.kind === 'points' || c.kind === 'times' || isDecimalRatio(c);
   const rounding = rounded ? Math.max(c.tol, target * 0.005) : c.tol * 1.5;
+  const productRounding = Math.max(c.tol * 0.5 + Number.EPSILON * target, target * 0.001);
+  const productAllowed = target >= 100;
   for (const a of inputs) {
     for (const b of inputs) {
       if (a === b) continue;
       const x = Math.abs(a.value);
       const y = Math.abs(b.value);
-      let candidates: number[] = [];
-      if (c.kind === 'percent' && y !== 0) candidates = [(x / y) * 100, (x / y - 1) * 100, (1 - x / y) * 100];
-      else if (c.kind === 'points' && a.kind === 'percent' && b.kind === 'percent') candidates = [x - y];
-      else if (c.kind === 'times' && y !== 0) candidates = [x / y];
-      else if (isDecimalRatio(c) && y !== 0 && a.kind !== 'percent' && b.kind !== 'percent') candidates = [x / y];
-      else if ((c.kind === 'amount' || c.kind === 'plain') && a.kind === c.kind && b.kind === c.kind) candidates = [x - y, x + y];
-      if (candidates.some((v) => Math.abs(Math.abs(v) - target) <= rounding)) return true;
+      const bothRatios = isDecimalRatio(a) && isDecimalRatio(b);
+      const near: Array<[number, number]> = [];
+      if (c.kind === 'percent' && y !== 0) near.push([(x / y) * 100, rounding], [(x / y - 1) * 100, rounding], [(1 - x / y) * 100, rounding]);
+      else if (c.kind === 'points' && a.kind === 'percent' && b.kind === 'percent') near.push([x - y, rounding]);
+      else if (c.kind === 'points' && bothRatios) near.push([(x - y) * 100, rounding]);
+      else if (c.kind === 'times' && y !== 0) near.push([x / y, rounding]);
+      else if (isDecimalRatio(c)) {
+        if (y !== 0 && a.kind !== 'percent' && b.kind !== 'percent') near.push([x / y, rounding]);
+        if (bothRatios) near.push([x - y, rounding], [x + y, rounding]);
+      } else if (c.kind === 'amount' || c.kind === 'plain') {
+        if (a.kind === c.kind && b.kind === c.kind) near.push([x - y, rounding], [x + y, rounding]);
+        if (productAllowed && isFigure(a) && isFigure(b)) {
+          near.push([x * y, productRounding]);
+          if (y !== 0) near.push([x / y, productRounding]);
+        }
+      }
+      if (near.some(([v, tol]) => Math.abs(Math.abs(v) - target) <= tol)) return true;
     }
   }
   return false;
+}
+
+/** An amount or a plain figure: an input of a product or a quotient. */
+function isFigure(c: Claim): boolean {
+  return c.kind === 'amount' || c.kind === 'plain';
+}
+
+/**
+ * Same kind: as before, within the coarser of the two (a summary line restating 7.4% for 7.43%).
+ * Across plain and 兆/億: within half the restating figure's last digit.
+ */
+function repeatTolerance(v: Claim, c: Claim): number {
+  return v.kind === c.kind ? Math.max(v.tol, c.tol) : c.tol * 0.5;
+}
+
+function sameKindForRepeat(a: Claim, b: Claim): boolean {
+  return a.kind === b.kind || (isFigure(a) && isFigure(b));
 }
 
 /** A plain decimal below 1 such as 0.0743: a ratio written before turning it into a percentage. */
@@ -189,17 +225,20 @@ export function checkAnswer(answer: string, sources: string[]): CheckResult {
         ? hasNear(values.points, c.value, c.tol)
         : hasNear(values.all, c.value, c.tol),
   );
-  // two passes: a figure computed from sourced figures may feed another computation
+  // several passes: a figure computed from sourced figures may feed another computation
   const verified = new Set<Claim>(sourced);
   // the inputs of a computation must be written in the same line, as the prompt asks; across the whole
   // answer some pair of rounded figures matches almost any small number (5.6 − 1.9 ≈ 3.6, 2026-11-11)
-  for (let pass = 0; pass < 2; pass++) {
+  // three passes: a product may feed a quotient that a rounded restatement repeats (yen → dollars → 億ドル)
+  for (let pass = 0; pass < 3; pass++) {
     for (const c of claims) {
       if (!verified.has(c) && derivable(c, [...verified].filter((v) => v.line === c.line))) verified.add(c);
     }
     // a figure already checked elsewhere in the answer may be repeated (a summary line restating 7.4%)
     for (const c of claims) {
-      if (!verified.has(c) && [...verified].some((v) => v.kind === c.kind && Math.abs(Math.abs(v.value) - Math.abs(c.value)) <= Math.max(v.tol, c.tol))) verified.add(c);
+      // an amount may restate a plain figure in 兆 / 億 (24,197,217,854,975円 ≈ 24兆1,972億円)
+      // within the restating figure's own precision: a coarse 4兆円 must not vouch for anything within ±1兆
+      if (!verified.has(c) && [...verified].some((v) => sameKindForRepeat(v, c) && Math.abs(Math.abs(v.value) - Math.abs(c.value)) <= repeatTolerance(v, c))) verified.add(c);
     }
   }
   const unverified = [...new Set(claims.filter((c) => !verified.has(c)).map((c) => c.raw))];
